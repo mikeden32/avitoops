@@ -1,13 +1,15 @@
-import { and, asc, eq, gt, inArray, or } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, or } from "drizzle-orm";
 import { db } from "../db";
-import { jobs, listings } from "../db/schema";
+import { avitoAccounts, jobs, listings } from "../db/schema";
 import type { JobType } from "../db/schema";
 import { AppError } from "../errors";
 import { clientCanCreate, promoBlockReason } from "../policy";
 import { redact } from "../redact";
 import { audit } from "./audit";
 import { getDepositBalance } from "./billing";
+import { dailyStartBlock } from "./daily";
 import { loadGate } from "./gate";
+import { releaseReply } from "./leads";
 import { dispatchPending, enqueueNotification } from "./notifications";
 
 const workTypes = new Set<JobType>(["publish", "update", "reply", "promo", "report"]);
@@ -116,7 +118,9 @@ export function publicJob(job: typeof jobs.$inferSelect) {
   };
 }
 
-export async function takeNextJob(agent: string) {
+const marketplace = new Set<JobType>(["publish", "update", "reply", "promo"]);
+
+export async function takeNextJob(agent: string, types?: JobType[]) {
   const gates = new Map<string, Awaited<ReturnType<typeof loadGate>>>();
   let cursor: { at: Date; id: string } | null = null;
 
@@ -154,6 +158,21 @@ export async function takeNextJob(agent: string) {
         await cancelJob("system", job.id);
         continue;
       }
+      if (types && !types.includes(job.type)) continue;
+      if (marketplace.has(job.type)) {
+        const [ready] = await db
+          .select({ userId: avitoAccounts.userId })
+          .from(avitoAccounts)
+          .where(
+            and(
+              eq(avitoAccounts.userId, job.userId),
+              eq(avitoAccounts.status, "connected"),
+              isNotNull(avitoAccounts.refreshToken),
+            ),
+          )
+          .limit(1);
+        if (!ready) continue;
+      }
       if (job.type === "promo") {
         const { currentPromo } = await import("./promo");
         const budget = await currentPromo(job.userId);
@@ -167,6 +186,7 @@ export async function takeNextJob(agent: string) {
         });
         if (reason) continue;
       }
+      if (await dailyStartBlock(job.userId, job.type)) continue;
 
       const [taken] = await db
         .update(jobs)
@@ -267,6 +287,9 @@ export async function completeJob(
     return { updated, lowBalance, title };
   });
 
+  if (input.status === "failed" && job.type === "reply") {
+    await releaseReply(digestId(job.payload));
+  }
   if (closed.lowBalance !== null) {
     await enqueueNotification({
       userId: job.userId,
@@ -324,6 +347,7 @@ export async function cancelOpenJobs(userId: string, actor: string) {
           .where(eq(listings.id, listing.id));
       }
     }
+    if (job.type === "reply") await releaseReply(digestId(job.payload));
     await audit({
       actor,
       action: "job_status",
@@ -354,6 +378,7 @@ export async function cancelJob(actor: string, jobId: string) {
         .where(eq(listings.id, listing.id));
     }
   }
+  if (job.type === "reply") await releaseReply(digestId(job.payload));
   await audit({
     actor,
     action: "job_status",
@@ -362,6 +387,10 @@ export async function cancelJob(actor: string, jobId: string) {
     before: { status: job.status },
     after: { status: "canceled" },
   });
+}
+
+function digestId(payload: Record<string, unknown>) {
+  return typeof payload.thread_ref === "string" ? payload.thread_ref : "";
 }
 
 function normalizeUrl(value?: string) {

@@ -13,7 +13,7 @@ export default async function PromoPage({
   const data = await loadPromo(user.id);
   const params = await searchParams;
   return (
-    <main className="grid max-w-xl gap-4">
+    <main className="grid gap-4">
       <PageTitle title="Продвижение" text="Реклама списывается с депозита и не выходит за недельный лимит." />
       <Banner message={params.error} />
       {params.ok ? <p className="text-sm text-good">Сохранено</p> : null}
@@ -21,6 +21,7 @@ export default async function PromoPage({
         Расход за неделю: {formatRub(data.spentRub)} из {formatRub(data.weekLimitRub)}. Депозит:{" "}
         {formatRub(data.depositRub)}.
       </p>
+      <div className="grid items-start gap-4 lg:grid-cols-2">
       <form action={promoSettingsAction} className="grid gap-3 rounded-2xl border border-line bg-card p-4">
         <label className="flex items-center gap-2 text-sm">
           <input name="enabled" type="checkbox" className="w-auto" defaultChecked={data.enabled} />
@@ -49,6 +50,7 @@ export default async function PromoPage({
         </button>
         {data.live.length === 0 ? <p className="text-sm text-muted">Нужно хотя бы одно опубликованное объявление.</p> : null}
       </form>
+      </div>
       <p className="text-sm">
         <a href="/app/billing">Пополнить депозит</a>
       </p>

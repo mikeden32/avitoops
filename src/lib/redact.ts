@@ -20,6 +20,10 @@ const forbiddenKeys = new Set([
   "port",
   "proxyLogin",
   "proxyPassword",
+  "refreshToken",
+  "refresh_token",
+  "accessToken",
+  "access_token",
 ]);
 
 export function assertNoSecrets(value: unknown, path = "root"): void {

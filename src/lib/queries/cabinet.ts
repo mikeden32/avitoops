@@ -9,7 +9,9 @@ import {
   paymentRequests,
   subscriptions,
 } from "../db/schema";
+import { DAILY_QUOTA, isPlan } from "../plans";
 import { assertNoSecrets } from "../redact";
+import { queuedCount, startedToday } from "../services/daily";
 import { getDepositBalance, listLedger } from "../services/billing";
 import { loadGate } from "../services/gate";
 import { currentPromo } from "../services/promo";
@@ -24,6 +26,10 @@ export async function loadDashboard(userId: string) {
     .select({ value: count() })
     .from(messagesDigest)
     .where(and(eq(messagesDigest.userId, userId), eq(messagesDigest.status, "new")));
+  const plan = gate.subscription?.plan ?? null;
+  const publishQuota = plan && isPlan(plan) ? DAILY_QUOTA[plan].publish : 0;
+  const publishStarted = publishQuota ? await startedToday(userId, "publish") : 0;
+  const publishQueued = await queuedCount(userId, "publish");
   const depositRub = await getDepositBalance(userId);
   const profile = await db
     .select({ companyName: clientProfiles.companyName })
@@ -33,13 +39,17 @@ export async function loadDashboard(userId: string) {
   const data = {
     access: gate.access,
     block: gate.block,
-    plan: gate.subscription?.plan ?? null,
+    plan,
     subscriptionStatus: gate.subscription?.status ?? null,
     periodEnd: gate.subscription?.currentPeriodEnd ?? null,
     listingCount: Number(listingCount?.value ?? 0),
+    publishStarted,
+    publishQuota,
+    publishQueued,
     newLeads: Number(leadCount?.value ?? 0),
     depositRub,
     hasProfile: Boolean(profile[0]),
+    trial: gate.subscription?.paymentProvider === "trial",
   };
   assertNoSecrets(data);
   return data;
@@ -150,6 +160,7 @@ export async function loadBilling(userId: string) {
     plan: sub?.plan ?? null,
     status: sub?.status ?? null,
     periodEnd: sub?.currentPeriodEnd ?? null,
+    trial: sub?.paymentProvider === "trial",
     depositRub: await getDepositBalance(userId),
     requests: requests.map((item) => ({
       id: item.id,

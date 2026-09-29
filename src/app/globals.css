@@ -1,39 +1,226 @@
 @import "tailwindcss";
 
 @theme {
-  --color-ink: #1c1915;
-  --color-paper: #f3eee6;
-  --color-card: #fffdf9;
-  --color-line: #e4d8c8;
-  --color-accent: #c24d24;
-  --color-muted: #6f675f;
-  --color-good: #1f6b45;
-  --color-warn: #8a5a00;
-  --color-bad: #8e2f2f;
+  --color-ink: #141414;
+  --color-paper: #f2f1f0;
+  --color-card: #ffffff;
+  --color-line: #e5e4e2;
+  --color-accent: #0084c7;
+  --color-brand: #00aaff;
+  --color-muted: #767676;
+  --color-good: #0b7a3b;
+  --color-warn: #9a5b00;
+  --color-bad: #d3122a;
 }
 
 body {
   background: var(--color-paper);
   color: var(--color-ink);
-  font-family: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-manrope), Arial, sans-serif;
 }
 
-input,
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]),
 textarea,
 select {
   width: 100%;
-  border: 1px solid var(--color-line);
-  background: white;
-  border-radius: 0.75rem;
-  padding: 0.6rem 0.75rem;
+  border: 1px solid #c5c4c2;
+  background: #fff;
+  border-radius: 12px;
+  padding: 0.7rem 0.85rem;
   font: inherit;
+  color: inherit;
 }
 
 textarea {
   min-height: 7rem;
+  resize: vertical;
+}
+
+input[type="file"] {
+  width: 100%;
+  border: 1px solid #c5c4c2;
+  background: #fff;
+  border-radius: 12px;
+  padding: 0.55rem 0.75rem;
+  font: inherit;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0.15rem 0 0;
+  padding: 0;
+  flex: 0 0 auto;
+  accent-color: var(--color-brand);
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):focus,
+textarea:focus,
+select:focus,
+input[type="file"]:focus {
+  border-color: var(--color-brand);
+  background: #fff;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 170, 255, 0.22);
+}
+
+input:disabled,
+textarea:disabled,
+select:disabled {
+  background: #f7f6f5;
+  color: var(--color-muted);
+}
+
+::placeholder {
+  color: #9b9b9b;
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--color-brand);
   outline-offset: 2px;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+}
+
+main a:not([class]) {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.shell {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 64rem;
+  margin-inline: auto;
+  padding-inline: 1rem;
+}
+
+@keyframes curator-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes curator-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes curator-blink {
+  0%,
+  7%,
+  11%,
+  16%,
+  20%,
+  100% {
+    transform: scaleY(1);
+  }
+  9%,
+  18% {
+    transform: scaleY(0.08);
+  }
+}
+
+@keyframes curator-look {
+  0%,
+  58%,
+  100% {
+    transform: translateX(0);
+  }
+  68%,
+  80% {
+    transform: translateX(2px);
+  }
+  88%,
+  95% {
+    transform: translateX(-1.6px);
+  }
+}
+
+@keyframes curator-mouth {
+  0%,
+  100% {
+    transform: scaleX(0.72);
+  }
+  45%,
+  55% {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes curator-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.curator-ring {
+  animation: curator-spin 7s linear infinite;
+}
+
+.curator-pulse {
+  animation: curator-pulse 1.8s ease-in-out infinite;
+}
+
+.curator-look,
+.curator-blink,
+.curator-mouth {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.curator-look {
+  animation: curator-look 6.5s ease-in-out infinite;
+}
+
+.curator-blink {
+  animation: curator-blink 4.6s ease-in-out infinite;
+}
+
+.curator-mouth {
+  animation: curator-mouth 2.6s ease-in-out infinite;
+}
+
+.curator-in {
+  animation: curator-in 0.22s ease-out;
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(-16px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.drawer-in {
+  animation: drawer-in 0.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .curator-ring,
+  .curator-pulse,
+  .curator-look,
+  .curator-blink,
+  .curator-mouth,
+  .curator-in,
+  .drawer-in {
+    animation: none;
+  }
 }

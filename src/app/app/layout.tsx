@@ -12,7 +12,7 @@ export default async function CabinetLayout({ children }: { children: React.Reac
   return (
     <>
       <PublicHeader />
-      <div className="mx-auto grid max-w-5xl gap-6 px-4 py-6">
+      <div className="shell grid gap-6 py-6">
         <CabinetNav />
         {dash.access !== "green" ? (
           <p className="rounded-xl border border-warn/40 bg-card px-3 py-2 text-sm text-warn">
@@ -21,7 +21,7 @@ export default async function CabinetLayout({ children }: { children: React.Reac
         ) : null}
         {!dash.hasProfile ? (
           <p className="rounded-xl border border-line bg-card px-3 py-2 text-sm">
-            Заполните онбординг, чтобы загрузить объявления. <a href="/app/onboarding">Открыть</a>
+                Заполните анкету, чтобы загрузить объявления. <a href="/app/onboarding">Открыть</a>
           </p>
         ) : null}
         {children}

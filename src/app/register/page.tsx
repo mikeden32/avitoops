@@ -19,10 +19,11 @@ export default async function RegisterPage({
   return (
     <>
       <PublicHeader />
-      <main className="mx-auto grid max-w-md gap-4 px-4 py-12">
-        <h1 className="text-3xl font-semibold">Регистрация</h1>
+      <main className="shell grid py-12">
+        <div className="mx-auto grid w-full max-w-md gap-4">
+        <h1 className="text-3xl font-extrabold tracking-tight">Регистрация</h1>
         <Banner message={params.error} />
-        <form action={registerAction} className="grid gap-3 rounded-2xl border border-line bg-card p-4">
+        <form action={registerAction} className="grid gap-3 rounded-[20px] border border-line bg-card p-5">
           <Field label="Email">
             <input name="email" type="email" autoComplete="email" required />
           </Field>
@@ -34,19 +35,23 @@ export default async function RegisterPage({
           </Field>
           <Field label="Тариф">
             <select name="plan" defaultValue={plan}>
-              <option value="start">Старт — {formatRub(PLANS.start.priceRub)}/мес</option>
-              <option value="business">Бизнес — {formatRub(PLANS.business.priceRub)}/мес</option>
+              {Object.values(PLANS).map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.title} — {formatRub(item.priceRub)}/мес
+                </option>
+              ))}
             </select>
           </Field>
           <p className="text-xs text-muted">
-            Нажимая «Создать аккаунт», вы создаёте заявку на оплату. До подтверждения оператором подписка не активна.{" "}
-            <Link href="/offer">Оферта</Link> пока в черновике.
+            Первый день — бесплатно, с дневными нормами тарифа Сеть: 20 объявлений, 20 правок и продвижение до 20 объявлений в день. Выбранный тариф подключим после оплаты.{" "}
+            <Link href="/offer">Оферта</Link>
           </p>
           <button className={buttonClass()}>Создать аккаунт</button>
         </form>
         <p className="text-sm text-muted">
           Уже есть аккаунт? <Link href="/login">Войти</Link>
         </p>
+        </div>
       </main>
     </>
   );

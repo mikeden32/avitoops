@@ -38,7 +38,11 @@ export async function loadGate(userId: string) {
     access,
     block: workBlockReason({
       subscription: subscription
-        ? { status: subscription.status, currentPeriodEnd: subscription.currentPeriodEnd }
+        ? {
+            status: subscription.status,
+            currentPeriodEnd: subscription.currentPeriodEnd,
+            paymentProvider: subscription.paymentProvider,
+          }
         : null,
       access,
     }),

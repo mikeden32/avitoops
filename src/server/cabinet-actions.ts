@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { isPlan } from "@/lib/plans";
 import { pauseSubscription, resumeSubscription } from "@/lib/services/access";
 import { createDepositRequest, createSubscriptionRequest } from "@/lib/services/billing";
+import { startCheckout } from "@/lib/services/checkout";
+import { yookassaConfigured } from "@/lib/yookassa";
 import { escalateLead, templateReply } from "@/lib/services/leads";
 import { createListing, movePhoto, updateListing } from "@/lib/services/listings";
 import { saveProfile, updateContacts } from "@/lib/services/profile";
@@ -137,23 +139,41 @@ export async function promoJobAction(formData: FormData) {
 export async function subscriptionRequestAction(formData: FormData) {
   const user = await requireClient();
   const plan = readText(formData, "plan");
+  let url: string | null = null;
   try {
     if (!isPlan(plan)) throw new AppError("Выберите тариф");
-    await createSubscriptionRequest(user.id, plan);
+    const request = await createSubscriptionRequest(user.id, plan);
+    if (yookassaConfigured()) url = await startCheckout(user.id, request.id);
   } catch (error) {
     bail("/app/billing", error);
   }
+  if (url) redirect(url);
   redirect("/app/billing?ok=1");
 }
 
 export async function depositRequestAction(formData: FormData) {
   const user = await requireClient();
+  let url: string | null = null;
   try {
-    await createDepositRequest(user.id, Number(readText(formData, "amount")));
+    const request = await createDepositRequest(user.id, Number(readText(formData, "amount")));
+    if (yookassaConfigured()) url = await startCheckout(user.id, request.id);
   } catch (error) {
     bail("/app/billing", error);
   }
+  if (url) redirect(url);
   redirect("/app/billing?ok=1");
+}
+
+export async function payRequestAction(formData: FormData) {
+  const user = await requireClient();
+  let url: string | null = null;
+  try {
+    url = await startCheckout(user.id, readText(formData, "id"));
+  } catch (error) {
+    bail("/app/billing", error);
+  }
+  if (url) redirect(url);
+  redirect("/app/billing?check=1");
 }
 
 export async function contactsAction(formData: FormData) {

@@ -61,6 +61,7 @@ function messageFor(kind: string, payload: Record<string, unknown>) {
   if (kind === "job_failed") return `Задача с ошибкой: ${String(payload.type ?? "")} ${String(payload.errorCode ?? "")}`;
   if (kind === "payment_lost") return `Просрочена оплата: ${String(payload.email ?? "")}`;
   if (kind === "lead_escalated") return `Лид передан вам: ${String(payload.preview ?? "")}`;
+  if (kind === "report_ready") return `Отчёт агента: ${String(payload.text ?? "")}`;
   return kind;
 }
 

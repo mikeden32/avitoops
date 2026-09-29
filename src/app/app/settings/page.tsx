@@ -12,10 +12,15 @@ export default async function SettingsPage({
   const data = await loadSettings(user.id);
   const params = await searchParams;
   return (
-    <main className="grid max-w-xl gap-4">
+    <main className="grid gap-4">
       <PageTitle title="Настройки" />
       <Banner message={params.error} />
-      {params.ok ? <p className="text-sm text-good">Сохранено</p> : null}
+      {params.ok === "avito" ? (
+        <p className="text-sm text-good">Авито подключён. Агент начнёт читать новые сообщения.</p>
+      ) : params.ok ? (
+        <p className="text-sm text-good">Сохранено</p>
+      ) : null}
+      <div className="grid items-start gap-4 lg:grid-cols-2">
       <form action={contactsAction} className="grid gap-3 rounded-2xl border border-line bg-card p-4">
         <Field label="Телефон">
           <input name="phone" type="tel" defaultValue={data.phone} required />
@@ -24,6 +29,17 @@ export default async function SettingsPage({
           <input name="telegram" defaultValue={data.telegram} />
         </Field>
         <p className="text-sm text-muted">Телефон входа в Авито: {data.loginHint || "не указан"}</p>
+        <p className="text-sm">
+          Кабинет Авито:{" "}
+          {data.avitoStatus === "connected"
+            ? "подключён, помощник читает новые сообщения и отвечает по анкете"
+            : "не подключён"}
+        </p>
+        {data.avitoStatus === "connected" ? null : (
+          <a className={buttonClass()} href="/api/avito/connect">
+            Подключить Авито
+          </a>
+        )}
         <button className={buttonClass()}>Сохранить контакты</button>
       </form>
       {data.subscriptionStatus === "paused" ? (
@@ -39,6 +55,7 @@ export default async function SettingsPage({
           <button className={buttonClass("danger")}>Остановить сервис</button>
         </form>
       )}
+      </div>
     </main>
   );
 }

@@ -19,7 +19,7 @@ export const citext = customType<{ data: string }>({
 });
 
 export const userRole = pgEnum("user_role", ["client", "admin"]);
-export const subPlan = pgEnum("sub_plan", ["start", "business"]);
+export const subPlan = pgEnum("sub_plan", ["start", "growth", "business", "scale"]);
 export const subStatus = pgEnum("sub_status", ["active", "past_due", "paused", "canceled"]);
 export const avitoStatus = pgEnum("avito_status", ["pending", "connected", "blocked"]);
 export const proxyProvider = pgEnum("proxy_provider", ["ltespace", "ltecenter", "other"]);
@@ -97,6 +97,8 @@ export const avitoAccounts = pgTable(
       .references(() => users.id),
     loginHint: text("login_hint"),
     status: avitoStatus("status").notNull().default("pending"),
+    avitoUserId: text("avito_user_id"),
+    refreshToken: text("refresh_token"),
     notes: text("notes"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -163,8 +165,10 @@ export const messagesDigest = pgTable("messages_digest", {
     .references(() => users.id),
   listingId: uuid("listing_id").references(() => listings.id),
   preview: text("preview").notNull(),
+  externalRef: text("external_ref"),
   urgency: leadUrgency("urgency").notNull().default("normal"),
   status: leadStatus("status").notNull().default("new"),
+  repliedAt: timestamp("replied_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -223,6 +227,7 @@ export const paymentRequests = pgTable("payment_requests", {
   plan: subPlan("plan"),
   amountRub: integer("amount_rub").notNull(),
   status: paymentStatus("status").notNull().default("pending"),
+  providerPaymentId: text("provider_payment_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   resolvedAt: timestamp("resolved_at", { withTimezone: true }),
   resolvedBy: text("resolved_by"),

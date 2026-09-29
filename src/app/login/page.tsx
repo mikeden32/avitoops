@@ -16,10 +16,11 @@ export default async function LoginPage({
   return (
     <>
       <PublicHeader />
-      <main className="mx-auto grid max-w-md gap-4 px-4 py-12">
-        <h1 className="text-3xl font-semibold">Вход</h1>
+      <main className="shell grid py-12">
+        <div className="mx-auto grid w-full max-w-md gap-4">
+        <h1 className="text-3xl font-extrabold tracking-tight">Вход</h1>
         <Banner message={params.error ? "Неверный email или пароль" : undefined} />
-        <form action={loginAction} className="grid gap-3 rounded-2xl border border-line bg-card p-4">
+        <form action={loginAction} className="grid gap-3 rounded-[20px] border border-line bg-card p-5">
           <Field label="Email">
             <input name="email" type="email" autoComplete="email" required />
           </Field>
@@ -31,6 +32,7 @@ export default async function LoginPage({
         <p className="text-sm text-muted">
           Нет аккаунта? <Link href="/register">Регистрация</Link>
         </p>
+        </div>
       </main>
     </>
   );

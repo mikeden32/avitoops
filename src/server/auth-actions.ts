@@ -8,6 +8,7 @@ import { AppError } from "@/lib/errors";
 import { isPlan } from "@/lib/plans";
 import { createSubscriptionRequest } from "@/lib/services/billing";
 import { registerUser } from "@/lib/services/users";
+import { yookassaConfigured } from "@/lib/yookassa";
 import { bail, readText } from "./form";
 
 const registerSchema = z.object({
@@ -36,7 +37,7 @@ export async function registerAction(formData: FormData) {
     await signIn("credentials", {
       email: parsed.data.email,
       password: parsed.data.password,
-      redirectTo: "/app/billing",
+      redirectTo: yookassaConfigured() && isPlan(planRaw) ? "/app/billing?pay=1" : "/app/billing",
     });
   } catch (error) {
     if (error instanceof AuthError) redirect("/login?error=credentials");

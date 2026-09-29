@@ -55,6 +55,7 @@ export async function loadClient(userId: string) {
     plan: sub?.plan ?? null,
     subscriptionStatus: sub?.status ?? null,
     periodEnd: sub?.currentPeriodEnd ?? null,
+    trial: sub?.paymentProvider === "trial",
     access: access?.state ?? "green",
     accessReason: access?.reason ?? "",
     avitoStatus: avito?.status ?? "pending",

@@ -1,7 +1,7 @@
 import { hash, compare } from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
-import { accessStatus, avitoAccounts, promoBudgets, users } from "../db/schema";
+import { accessStatus, avitoAccounts, promoBudgets, subscriptions, users } from "../db/schema";
 import { AppError } from "../errors";
 import { moscowWeekStart } from "../week";
 import { audit } from "./audit";
@@ -28,6 +28,13 @@ export async function registerUser(input: { email: string; password: string; pho
         spentRub: 0,
         enabled: false,
         weekStart: moscowWeekStart(),
+      });
+      await tx.insert(subscriptions).values({
+        userId: user.id,
+        plan: "scale",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        paymentProvider: "trial",
       });
       return user;
     });

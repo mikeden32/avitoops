@@ -3,6 +3,7 @@ import { db } from "../db";
 import { listings, messagesDigest, users } from "../db/schema";
 import { AppError } from "../errors";
 import { audit } from "./audit";
+import { replySlotOpen } from "./daily";
 import { enqueueNotification } from "./notifications";
 
 export async function createDigest(input: {
@@ -11,9 +12,19 @@ export async function createDigest(input: {
   preview: string;
   urgency: "hot" | "normal";
   actor: string;
+  externalRef?: string | null;
 }) {
   const preview = input.preview.trim();
+  const externalRef = input.externalRef?.trim() || null;
   if (!preview) throw new AppError("Нужен текст лида");
+  if (externalRef) {
+    const [existing] = await db
+      .select()
+      .from(messagesDigest)
+      .where(and(eq(messagesDigest.userId, input.userId), eq(messagesDigest.externalRef, externalRef)))
+      .limit(1);
+    if (existing) return existing;
+  }
   const [user] = await db.select().from(users).where(eq(users.id, input.userId)).limit(1);
   if (!user || user.role !== "client") throw new AppError("Клиент не найден");
   if (input.listingId) {
@@ -30,6 +41,7 @@ export async function createDigest(input: {
       userId: input.userId,
       listingId: input.listingId ?? null,
       preview,
+      externalRef,
       urgency: input.urgency,
       status: "new",
     })
@@ -74,9 +86,10 @@ export async function templateReply(userId: string, digestId: string) {
     .limit(1);
   if (!row) throw new AppError("Лид не найден");
   if (row.status === "handled") throw new AppError("Лид уже обработан");
+  if (!(await replySlotOpen(userId))) throw new AppError("Ответим завтра утром");
   const [claimed] = await db
     .update(messagesDigest)
-    .set({ status: "handled" })
+    .set({ status: "handled", repliedAt: new Date() })
     .where(
       and(
         eq(messagesDigest.id, digestId),
@@ -98,8 +111,16 @@ export async function templateReply(userId: string, digestId: string) {
   } catch (error) {
     await db
       .update(messagesDigest)
-      .set({ status: row.status })
+      .set({ status: row.status, repliedAt: null })
       .where(eq(messagesDigest.id, digestId));
     throw error;
   }
+}
+
+export async function releaseReply(digestId: string) {
+  if (!digestId) return;
+  await db
+    .update(messagesDigest)
+    .set({ status: "new", repliedAt: null })
+    .where(and(eq(messagesDigest.id, digestId), eq(messagesDigest.status, "handled")));
 }

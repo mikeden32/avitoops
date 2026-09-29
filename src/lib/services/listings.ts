@@ -1,11 +1,10 @@
 import { rm } from "node:fs/promises";
-import { and, count, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../db";
 import { listings, subscriptions } from "../db/schema";
 import type { ListingStatus } from "../db/schema";
 import { AppError } from "../errors";
-import { safeJoin, saveUploads, type Upload } from "../files";
-import { listingCap } from "../policy";
+import { assertUploads, safeJoin, saveUploads, type Upload } from "../files";
 import { getProfile } from "./profile";
 import { enqueueJob } from "./jobs";
 
@@ -23,20 +22,18 @@ export type ListingInput = {
 
 const sendable = new Set<ListingStatus>(["draft", "error", "paused"]);
 
-async function assertProfileAndCap(userId: string, extra = 1) {
+async function assertCanCreate(userId: string) {
   const profile = await getProfile(userId);
   if (!profile) throw new AppError("Сначала заполните онбординг");
   const [sub] = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).limit(1);
+  if (
+    sub?.paymentProvider === "trial" &&
+    (sub.status !== "active" || sub.currentPeriodEnd.getTime() <= Date.now())
+  ) {
+    throw new AppError("Пробный день закончился. Чтобы продолжить, нужна оплата тарифа.");
+  }
   if (!sub || (sub.status !== "active" && sub.status !== "past_due")) {
     throw new AppError("Создавать объявления можно после оплаты тарифа");
-  }
-  const [row] = await db
-    .select({ value: count() })
-    .from(listings)
-    .where(eq(listings.userId, userId));
-  const used = Number(row?.value ?? 0);
-  if (used + extra > listingCap(sub.plan)) {
-    throw new AppError(`Лимит тарифа: ${listingCap(sub.plan)} объявлений`);
   }
 }
 
@@ -47,7 +44,8 @@ export async function createListing(
   intent: "draft" | "send",
 ) {
   validateListing(input);
-  await assertProfileAndCap(userId, 1);
+  assertUploads(uploads);
+  await assertCanCreate(userId);
   const [created] = await db
     .insert(listings)
     .values({
@@ -65,7 +63,13 @@ export async function createListing(
       status: "draft",
     })
     .returning();
-  const photos = await saveUploads(userId, created.id, uploads);
+  let photos: string[];
+  try {
+    photos = await saveUploads(userId, created.id, uploads);
+  } catch (error) {
+    await db.delete(listings).where(eq(listings.id, created.id));
+    throw error;
+  }
   if (photos.length === 0) {
     await db.delete(listings).where(eq(listings.id, created.id));
     throw new AppError("Добавьте хотя бы одно фото");
@@ -113,6 +117,7 @@ export async function updateListing(
     throw new AppError("Объявление уже в работе");
   }
   const photos = listing.photos.filter((name) => !remove.includes(name));
+  assertUploads(uploads, photos.length);
   const added = await saveUploads(userId, listing.id, uploads);
   const nextPhotos = [...photos, ...added];
   if (nextPhotos.length === 0) throw new AppError("Добавьте хотя бы одно фото");

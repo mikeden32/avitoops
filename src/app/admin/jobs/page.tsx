@@ -19,15 +19,18 @@ export default async function JobsPage({
       <PageTitle title="Задачи" text="Сайт пишет очередь. Авитолог забирает её внутренним ключом или копией payload." />
       <Banner message={params.error} />
       <div className="flex flex-wrap gap-2 text-sm">
-        {filters.map((status) => (
-          <Link
-            key={status || "all"}
-            href={status ? `/admin/jobs?status=${status}` : "/admin/jobs"}
-            className="rounded-full bg-card px-3 py-1"
-          >
-            {status || "все"}
-          </Link>
-        ))}
+        {filters.map((status) => {
+          const active = (params.status ?? "") === status;
+          return (
+            <Link
+              key={status || "all"}
+              href={status ? `/admin/jobs?status=${status}` : "/admin/jobs"}
+              className={`rounded-xl px-4 py-2 font-semibold ${active ? "bg-ink text-white" : "bg-card text-ink"}`}
+            >
+              {status || "все"}
+            </Link>
+          );
+        })}
       </div>
       <ul className="grid gap-3">
         {rows.map((job) => {

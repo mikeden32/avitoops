@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { PageTitle } from "@/components/ui";
 import { accessLabel, subscriptionStatusLabel } from "@/lib/format";
+import { planTitle } from "@/lib/plans";
 import { loadClients } from "@/lib/queries/admin";
 
 export default async function AdminClientsPage() {
@@ -27,7 +28,7 @@ export default async function AdminClientsPage() {
                     {client.email}
                   </Link>
                 </td>
-                <td className="px-3 py-2">{client.plan ?? "—"}</td>
+                <td className="px-3 py-2">{client.plan ? planTitle(client.plan) : "—"}</td>
                 <td className="px-3 py-2">
                   {client.subscriptionStatus ? subscriptionStatusLabel(client.subscriptionStatus) : "—"}
                 </td>

@@ -20,7 +20,7 @@ export default async function ListingPage({
   if (!data) notFound();
   const { listing, history } = data;
   return (
-    <main className="grid max-w-xl gap-4">
+    <main className="grid gap-4">
       <PageTitle title={listing.title} text={listingStatusLabel(listing.status)} />
       {listing.avitoUrl ? (
         <a className="text-sm text-accent" href={listing.avitoUrl}>

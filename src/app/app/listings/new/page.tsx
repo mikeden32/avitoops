@@ -11,8 +11,8 @@ export default async function NewListingPage({
   await requireClient();
   const params = await searchParams;
   return (
-    <main className="grid max-w-xl gap-4">
-      <PageTitle title="Новое объявление" />
+    <main className="grid gap-4">
+      <PageTitle title="Ручной ввод объявления" text="Поля заполняете сами. Авито-куратор в углу экрана подскажет, из чата объявление не создаёт." />
       <ListingForm action={createListingAction} error={params.error} />
     </main>
   );

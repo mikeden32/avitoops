@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { Banner, Field, PageTitle, buttonClass } from "@/components/ui";
-import { formatDate } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
+import { planTitle } from "@/lib/plans";
 import { loadClient } from "@/lib/queries/admin";
 import {
   accessAction,
@@ -25,7 +26,14 @@ export default async function AdminClientPage({
   if (!client) notFound();
   return (
     <main className="grid gap-4">
-      <PageTitle title={client.email} text={`${client.plan ?? "без тарифа"} · до ${formatDate(client.periodEnd)}`} />
+      <PageTitle
+        title={client.email}
+        text={
+          client.trial
+            ? `Пробный день · ${planTitle(client.plan)} · до ${formatDateTime(client.periodEnd)}`
+            : `${client.plan ? planTitle(client.plan) : "без тарифа"} · до ${formatDateTime(client.periodEnd)}`
+        }
+      />
       <Banner message={query.error} />
       <section className="grid gap-2 rounded-2xl border border-line bg-card p-4 text-sm">
         <p>Телефон: {client.phone || "—"}</p>

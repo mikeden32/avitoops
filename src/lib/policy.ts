@@ -1,11 +1,11 @@
-import type { AccessState, JobType, Plan } from "./db/schema";
-import { PLAN_LIMITS } from "./plans";
+import type { AccessState, JobType } from "./db/schema";
 
 const DAY = 24 * 60 * 60 * 1000;
 
 export type SubscriptionGate = {
   status: "active" | "past_due" | "paused" | "canceled";
   currentPeriodEnd: Date;
+  paymentProvider?: string | null;
 };
 
 export function workBlockReason(input: {
@@ -18,6 +18,12 @@ export function workBlockReason(input: {
   if (!sub) return "Нет активной подписки";
   if (sub.status === "paused") return "Сервис на паузе";
   if (sub.status === "canceled") return "Подписка отменена";
+  if (
+    sub.paymentProvider === "trial" &&
+    (sub.status !== "active" || sub.currentPeriodEnd.getTime() <= now.getTime())
+  ) {
+    return "Пробный день тарифа Сеть закончился. Выберите тариф и отправьте заявку на оплату.";
+  }
   if (sub.status === "past_due") {
     const graceEnd = sub.currentPeriodEnd.getTime() + 3 * DAY;
     if (now.getTime() > graceEnd) return "Оплата просрочена больше 3 дней";
@@ -26,10 +32,6 @@ export function workBlockReason(input: {
   }
   if (input.access !== "green") return "Доступ временно на паузе";
   return null;
-}
-
-export function listingCap(plan: Plan) {
-  return PLAN_LIMITS[plan];
 }
 
 export function promoBlockReason(input: {

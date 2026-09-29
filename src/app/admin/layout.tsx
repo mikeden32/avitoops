@@ -9,7 +9,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <>
       <PublicHeader />
-      <div className="mx-auto grid max-w-5xl gap-6 px-4 py-6">
+      <div className="shell grid gap-6 py-6">
         <AdminNav />
         {children}
       </div>

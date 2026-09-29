@@ -31,7 +31,7 @@ export async function createSubscriptionRequest(userId: string, plan: Plan) {
       ),
     )
     .limit(1);
-  if (pending[0]) throw new AppError("Заявка на подписку уже ждёт подтверждения");
+  if (pending[0]) throw new AppError("Уже есть неоплаченная заявка на тариф. Оплатите её в списке ниже.");
   const [row] = await db
     .insert(paymentRequests)
     .values({
@@ -67,7 +67,7 @@ export async function createDepositRequest(userId: string, amountRub: number) {
       ),
     )
     .limit(1);
-  if (pending[0]) throw new AppError("Заявка на депозит уже ждёт подтверждения");
+  if (pending[0]) throw new AppError("Уже есть неоплаченное пополнение. Оплатите его в списке ниже.");
   const [row] = await db
     .insert(paymentRequests)
     .values({ userId, kind: "deposit", amountRub, status: "pending" })
@@ -82,7 +82,11 @@ export async function createDepositRequest(userId: string, amountRub: number) {
   return row;
 }
 
-export async function confirmPayment(actor: string, requestId: string) {
+export async function confirmPayment(
+  actor: string,
+  requestId: string,
+  source: "manual" | "yookassa" = "manual",
+) {
   const request = await db.transaction(async (tx) => {
     const [request] = await tx
       .update(paymentRequests)
@@ -99,11 +103,14 @@ export async function confirmPayment(actor: string, requestId: string) {
         .where(eq(subscriptions.userId, request.userId))
         .limit(1);
       const now = new Date();
+      const trialLive =
+        current?.paymentProvider === "trial" && current.status === "active" && current.currentPeriodEnd > now;
       const base =
-        current && current.status === "active" && current.currentPeriodEnd > now
-          ? current.currentPeriodEnd
-          : now;
+        trialLive || !(current && current.status === "active" && current.currentPeriodEnd > now)
+          ? now
+          : current.currentPeriodEnd;
       const periodEnd = new Date(base.getTime() + MONTH);
+      const providerId = source === "yookassa" ? request.providerPaymentId ?? request.id : request.id;
       if (current) {
         await tx
           .update(subscriptions)
@@ -111,8 +118,8 @@ export async function confirmPayment(actor: string, requestId: string) {
             plan: request.plan,
             status: "active",
             currentPeriodEnd: periodEnd,
-            paymentProvider: "manual",
-            paymentProviderId: request.id,
+            paymentProvider: source,
+            paymentProviderId: providerId,
           })
           .where(eq(subscriptions.userId, request.userId));
       } else {
@@ -121,22 +128,22 @@ export async function confirmPayment(actor: string, requestId: string) {
           plan: request.plan,
           status: "active",
           currentPeriodEnd: periodEnd,
-          paymentProvider: "manual",
-          paymentProviderId: request.id,
+          paymentProvider: source,
+          paymentProviderId: providerId,
         });
       }
       await tx.insert(ledger).values({
         userId: request.userId,
         kind: "subscription",
         amountRub: request.amountRub,
-        meta: { requestId: request.id, plan: request.plan, provider: "manual" },
+        meta: { requestId: request.id, plan: request.plan, provider: source },
       });
     } else {
       await tx.insert(ledger).values({
         userId: request.userId,
         kind: "deposit",
         amountRub: request.amountRub,
-        meta: { requestId: request.id, provider: "manual" },
+        meta: { requestId: request.id, provider: source },
       });
     }
 
