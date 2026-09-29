@@ -1,0 +1,17 @@
+---
+description: Ограничения этой машины и проекта AvitoOps, чтобы не повторять уже пойманные ошибки
+alwaysApply: true
+---
+
+# AvitoOps на этой машине
+
+- План в `.cursor/plans` не переписывать с чистого листа. Только точечные правки. Новый файл плана не создавать.
+- Каталог с кириллицей и пробелом. Пакет npm — `avitoops`. `create-next-app` здесь не запускать. Скрипты не завязывать на `$PSScriptRoot` в этом пути.
+- Кластер Postgres: `%USERPROFILE%\.avitoops\pg`, порт 54329, кодировка WIN1251. `initdb` с UTF-8 на русской Windows не повторять.
+- Проверка localhost: `curl.exe --noproxy "*"`. Не `Invoke-WebRequest`.
+- `next-auth` держать на запиненном `5.0.0-beta.29`, `embedded-postgres` — на `18.4.0-beta.17`. Не поднимать эти beta до голого latest.
+- `AUTH_URL`, если задают, целиком `http://localhost:3000`. На локальном HTTP cookie `secure` не включать. Middleware импортирует только `auth.config.ts` без БД.
+- Не импортировать `postgres` из `instrumentation.ts` и middleware: сборка тянет `net`/`tls`.
+- Пароль Авито не хранить. В БД только `login_hint`. Пароли сайта и `.env` не коммитить.
+- Кабинет меняется server actions. Второй REST рядом с `/api/internal` и `/api/photos` не заводить.
+- Регистрация — одна транзакция: user, кабинет Авито, зелёный доступ, пустой бюджет промо. Email в нижнем регистре, пароль через `bcryptjs`.

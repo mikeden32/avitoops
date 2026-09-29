@@ -1,5 +1,6 @@
 import { Banner, Field, PageTitle, buttonClass } from "@/components/ui";
 import { formatDate, formatDateTime, formatRub, subscriptionStatusLabel } from "@/lib/format";
+import { PLANS } from "@/lib/plans";
 import { loadBilling } from "@/lib/queries/cabinet";
 import { requireClient } from "@/lib/session";
 import { depositRequestAction, subscriptionRequestAction } from "@/server/cabinet-actions";
@@ -36,8 +37,8 @@ export default async function BillingPage({
       <form action={subscriptionRequestAction} className="grid gap-3 rounded-2xl border border-line bg-card p-4">
         <Field label="Заявка на подписку">
           <select name="plan" defaultValue={data.plan ?? "start"}>
-            <option value="start">Старт — 4 900 ₽</option>
-            <option value="business">Бизнес — 9 900 ₽</option>
+            <option value="start">Старт — {formatRub(PLANS.start.priceRub)}</option>
+            <option value="business">Бизнес — {formatRub(PLANS.business.priceRub)}</option>
           </select>
         </Field>
         <button className={buttonClass()}>Запросить оплату</button>

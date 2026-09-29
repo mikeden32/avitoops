@@ -1,5 +1,5 @@
 import { and, desc, eq } from "drizzle-orm";
-import { db } from "../db";
+import { db, type Tx } from "../db";
 import { ledger, paymentRequests, subscriptions } from "../db/schema";
 import type { Plan } from "../db/schema";
 import { AppError } from "../errors";
@@ -8,8 +8,10 @@ import { audit } from "./audit";
 
 const MONTH = 30 * 24 * 60 * 60 * 1000;
 
-export async function getDepositBalance(userId: string) {
-  const rows = await db.select().from(ledger).where(eq(ledger.userId, userId));
+type Exec = typeof db | Tx;
+
+export async function getDepositBalance(userId: string, executor: Exec = db) {
+  const rows = await executor.select().from(ledger).where(eq(ledger.userId, userId));
   return rows.reduce((sum, row) => {
     if (row.kind === "deposit" || row.kind === "refund") return sum + row.amountRub;
     if (row.kind === "promo_spend") return sum - row.amountRub;

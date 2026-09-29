@@ -73,17 +73,33 @@ export async function templateReply(userId: string, digestId: string) {
     .where(and(eq(messagesDigest.id, digestId), eq(messagesDigest.userId, userId)))
     .limit(1);
   if (!row) throw new AppError("Лид не найден");
-  const { enqueueJob } = await import("./jobs");
-  const job = await enqueueJob({
-    userId,
-    type: "reply",
-    listingId: row.listingId,
-    payload: { thread_ref: row.id, tone: "short" },
-    createdBy: userId,
-  });
-  await db
+  if (row.status === "handled") throw new AppError("Лид уже обработан");
+  const [claimed] = await db
     .update(messagesDigest)
     .set({ status: "handled" })
-    .where(eq(messagesDigest.id, digestId));
-  return job;
+    .where(
+      and(
+        eq(messagesDigest.id, digestId),
+        eq(messagesDigest.userId, userId),
+        eq(messagesDigest.status, row.status),
+      ),
+    )
+    .returning();
+  if (!claimed) throw new AppError("Лид уже обработан");
+  try {
+    const { enqueueJob } = await import("./jobs");
+    return await enqueueJob({
+      userId,
+      type: "reply",
+      listingId: row.listingId,
+      payload: { thread_ref: row.id, tone: "short" },
+      createdBy: userId,
+    });
+  } catch (error) {
+    await db
+      .update(messagesDigest)
+      .set({ status: row.status })
+      .where(eq(messagesDigest.id, digestId));
+    throw error;
+  }
 }

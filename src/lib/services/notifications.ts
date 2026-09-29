@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import nodemailer from "nodemailer";
 import { db } from "../db";
 import { notificationOutbox, users } from "../db/schema";
@@ -22,6 +22,7 @@ export async function enqueueNotification(input: {
       status: "pending" as const,
     })),
   );
+  await dispatchPending();
 }
 
 async function sendEmail(to: string, subject: string, text: string) {
@@ -64,13 +65,16 @@ function messageFor(kind: string, payload: Record<string, unknown>) {
 }
 
 export async function dispatchPending() {
-  const pending = await db
-    .select()
-    .from(notificationOutbox)
-    .where(eq(notificationOutbox.status, "pending"))
-    .limit(50);
-
-  for (const item of pending) {
+  for (let round = 0; round < 10; round += 1) {
+    const pending = await db
+      .select()
+      .from(notificationOutbox)
+      .where(eq(notificationOutbox.status, "pending"))
+      .orderBy(sql`${notificationOutbox.attemptAt} asc nulls first`, asc(notificationOutbox.createdAt))
+      .limit(50);
+    if (pending.length === 0) return;
+    const hadFresh = pending.some((item) => !item.attemptAt);
+    for (const item of pending) {
     const user = item.userId
       ? (await db.select().from(users).where(eq(users.id, item.userId)).limit(1))[0]
       : null;
@@ -97,6 +101,13 @@ export async function dispatchPending() {
         .update(notificationOutbox)
         .set({ status: "sent", sentAt: new Date() })
         .where(eq(notificationOutbox.id, item.id));
+    } else {
+      await db
+        .update(notificationOutbox)
+        .set({ attemptAt: new Date() })
+        .where(eq(notificationOutbox.id, item.id));
     }
+    }
+    if (!hadFresh) return;
   }
 }

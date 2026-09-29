@@ -3,7 +3,8 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { PublicHeader } from "@/components/public-header";
 import { Banner, Field, buttonClass } from "@/components/ui";
-import { isPlan } from "@/lib/plans";
+import { formatRub } from "@/lib/format";
+import { PLANS, isPlan } from "@/lib/plans";
 import { registerAction } from "@/server/auth-actions";
 
 export default async function RegisterPage({
@@ -33,8 +34,8 @@ export default async function RegisterPage({
           </Field>
           <Field label="Тариф">
             <select name="plan" defaultValue={plan}>
-              <option value="start">Старт — 4 900 ₽/мес</option>
-              <option value="business">Бизнес — 9 900 ₽/мес</option>
+              <option value="start">Старт — {formatRub(PLANS.start.priceRub)}/мес</option>
+              <option value="business">Бизнес — {formatRub(PLANS.business.priceRub)}/мес</option>
             </select>
           </Field>
           <p className="text-xs text-muted">

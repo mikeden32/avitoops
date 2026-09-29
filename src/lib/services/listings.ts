@@ -1,9 +1,10 @@
+import { rm } from "node:fs/promises";
 import { and, count, eq } from "drizzle-orm";
 import { db } from "../db";
 import { listings, subscriptions } from "../db/schema";
 import type { ListingStatus } from "../db/schema";
 import { AppError } from "../errors";
-import { saveUploads, type Upload } from "../files";
+import { safeJoin, saveUploads, type Upload } from "../files";
 import { listingCap } from "../policy";
 import { getProfile } from "./profile";
 import { enqueueJob } from "./jobs";
@@ -75,15 +76,27 @@ export async function createListing(
     .where(eq(listings.id, created.id))
     .returning();
   if (intent === "send") {
-    await enqueueJob({
-      userId,
-      type: "publish",
-      listingId: saved.id,
-      payload: { listing_id: saved.id },
-      createdBy: userId,
-    });
+    try {
+      await enqueueJob({
+        userId,
+        type: "publish",
+        listingId: saved.id,
+        payload: { listing_id: saved.id },
+        createdBy: userId,
+      });
+    } catch (error) {
+      await discardListing(userId, saved.id, saved.photos);
+      throw error;
+    }
   }
   return saved;
+}
+
+async function discardListing(userId: string, listingId: string, photos: string[]) {
+  for (const name of photos) {
+    await rm(safeJoin(userId, listingId, name), { force: true });
+  }
+  await db.delete(listings).where(and(eq(listings.id, listingId), eq(listings.userId, userId)));
 }
 
 export async function updateListing(

@@ -51,3 +51,5 @@ curl -X POST http://localhost:3000/api/internal/digest \
 ## Проверка
 
 `npm run accept` прогоняет сценарий пилота по базе: лимит тарифа, публикация до live, пауза доступа, депозит, слот прокси.
+
+Ручная проверка HTTP на этой машине: `curl.exe --noproxy "*"`. `Invoke-WebRequest` уходит в системный прокси и не видит localhost.

@@ -1,19 +1,20 @@
 import { eq } from "drizzle-orm";
-import { db } from "../db";
+import { db, type Tx } from "../db";
 import { ledger, promoBudgets } from "../db/schema";
 import { AppError } from "../errors";
 import { LOW_DEPOSIT_RUB } from "../plans";
 import { moscowWeekStart } from "../week";
 import { audit } from "./audit";
 import { getDepositBalance } from "./billing";
-import { enqueueNotification } from "./notifications";
 
-export async function currentPromo(userId: string) {
+type Exec = typeof db | Tx;
+
+export async function currentPromo(userId: string, executor: Exec = db) {
   const week = moscowWeekStart();
-  const [budget] = await db.select().from(promoBudgets).where(eq(promoBudgets.userId, userId)).limit(1);
+  const [budget] = await executor.select().from(promoBudgets).where(eq(promoBudgets.userId, userId)).limit(1);
   if (!budget) throw new AppError("Бюджет продвижения не найден");
   if (budget.weekStart < week) {
-    const [reset] = await db
+    const [reset] = await executor
       .update(promoBudgets)
       .set({ spentRub: 0, weekStart: week })
       .where(eq(promoBudgets.userId, userId))
@@ -66,30 +67,36 @@ export async function requestPromo(userId: string, listingId: string, maxRub: nu
   });
 }
 
-export async function recordPromoSpend(userId: string, spentRub: number, jobId: string) {
+export async function recordPromoSpend(
+  userId: string,
+  spentRub: number,
+  jobId: string,
+  maxRub: number,
+  executor: Exec = db,
+) {
   if (!Number.isInteger(spentRub) || spentRub <= 0) throw new AppError("Некорректная сумма расхода");
-  const before = await getDepositBalance(userId);
-  const budget = await currentPromo(userId);
+  if (!Number.isInteger(maxRub) || maxRub <= 0 || spentRub > maxRub) {
+    throw new AppError("Расход выше заявленной суммы");
+  }
+  const before = await getDepositBalance(userId, executor);
+  const budget = await currentPromo(userId, executor);
   if (budget.spentRub + spentRub > budget.weekLimitRub) {
     throw new AppError("Расход выше недельного лимита");
   }
   if (before < spentRub) throw new AppError("Расход выше депозита");
-  await db
+  await executor
     .update(promoBudgets)
     .set({ spentRub: budget.spentRub + spentRub })
     .where(eq(promoBudgets.userId, userId));
-  await db.insert(ledger).values({
+  await executor.insert(ledger).values({
     userId,
     kind: "promo_spend",
     amountRub: spentRub,
     meta: { jobId },
   });
   const balance = before - spentRub;
-  if (before >= LOW_DEPOSIT_RUB && balance < LOW_DEPOSIT_RUB) {
-    await enqueueNotification({
-      userId,
-      kind: "low_deposit",
-      payload: { balanceRub: balance },
-    });
-  }
+  return {
+    balance,
+    notifyLow: before >= LOW_DEPOSIT_RUB && balance < LOW_DEPOSIT_RUB,
+  };
 }

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, or } from "drizzle-orm";
 import { db } from "../db";
 import { jobs, listings } from "../db/schema";
 import type { JobType } from "../db/schema";
@@ -43,6 +43,21 @@ export async function enqueueJob(input: {
     if (open[0]) throw new AppError("Запрос на смену доступа уже создан");
   } else if (gate.block) {
     throw new AppError(gate.block);
+  }
+
+  if ((input.type === "publish" || input.type === "update") && input.listingId) {
+    const [open] = await db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.listingId, input.listingId),
+          inArray(jobs.type, ["publish", "update"]),
+          inArray(jobs.status, ["queued", "running"]),
+        ),
+      )
+      .limit(1);
+    if (open) throw new AppError("По этому объявлению уже есть задача в работе");
   }
 
   if (input.type === "promo") {
@@ -102,59 +117,78 @@ export function publicJob(job: typeof jobs.$inferSelect) {
 }
 
 export async function takeNextJob(agent: string) {
-  const queued = await db
-    .select()
-    .from(jobs)
-    .where(eq(jobs.status, "queued"))
-    .orderBy(asc(jobs.createdAt))
-    .limit(100);
-
   const gates = new Map<string, Awaited<ReturnType<typeof loadGate>>>();
-  for (const job of queued) {
-    let gate = gates.get(job.userId);
-    if (!gate) {
-      gate = await loadGate(job.userId);
-      gates.set(job.userId, gate);
-    }
-    if (job.type === "heal_access") {
-      if (gate.access === "green") continue;
-    } else if (!workTypes.has(job.type) || gate.block) {
-      continue;
-    }
-    if (job.type === "promo") {
-      const { currentPromo } = await import("./promo");
-      const budget = await currentPromo(job.userId);
-      const depositRub = await getDepositBalance(job.userId);
-      const reason = promoBlockReason({
-        enabled: budget.enabled,
-        weekLimitRub: budget.weekLimitRub,
-        spentRub: budget.spentRub,
-        depositRub,
-        maxRub: Number(job.payload.max_rub ?? 0),
-      });
-      if (reason) continue;
-    }
+  let cursor: { at: Date; id: string } | null = null;
 
-    const [taken] = await db
-      .update(jobs)
-      .set({ status: "running", assignedAgent: agent, startedAt: new Date() })
-      .where(and(eq(jobs.id, job.id), eq(jobs.status, "queued")))
-      .returning();
-    if (!taken) continue;
-    if ((taken.type === "publish" || taken.type === "update") && taken.listingId) {
-      await db
-        .update(listings)
-        .set({ status: "publishing", updatedAt: new Date() })
-        .where(eq(listings.id, taken.listingId));
+  for (let batch = 0; batch < 20; batch += 1) {
+    const queued = await db
+      .select()
+      .from(jobs)
+      .where(
+        cursor
+          ? and(
+              eq(jobs.status, "queued"),
+              or(gt(jobs.createdAt, cursor.at), and(eq(jobs.createdAt, cursor.at), gt(jobs.id, cursor.id))),
+            )
+          : eq(jobs.status, "queued"),
+      )
+      .orderBy(asc(jobs.createdAt), asc(jobs.id))
+      .limit(100);
+    if (queued.length === 0) return null;
+
+    for (const job of queued) {
+      cursor = { at: job.createdAt, id: job.id };
+      let gate = gates.get(job.userId);
+      if (!gate) {
+        gate = await loadGate(job.userId);
+        gates.set(job.userId, gate);
+      }
+      if (job.type === "heal_access") {
+        if (gate.access === "green") {
+          await cancelJob("system", job.id);
+          continue;
+        }
+      } else if (!workTypes.has(job.type)) {
+        continue;
+      } else if (gate.block) {
+        await cancelJob("system", job.id);
+        continue;
+      }
+      if (job.type === "promo") {
+        const { currentPromo } = await import("./promo");
+        const budget = await currentPromo(job.userId);
+        const depositRub = await getDepositBalance(job.userId);
+        const reason = promoBlockReason({
+          enabled: budget.enabled,
+          weekLimitRub: budget.weekLimitRub,
+          spentRub: budget.spentRub,
+          depositRub,
+          maxRub: Number(job.payload.max_rub ?? 0),
+        });
+        if (reason) continue;
+      }
+
+      const [taken] = await db
+        .update(jobs)
+        .set({ status: "running", assignedAgent: agent, startedAt: new Date() })
+        .where(and(eq(jobs.id, job.id), eq(jobs.status, "queued")))
+        .returning();
+      if (!taken) continue;
+      if ((taken.type === "publish" || taken.type === "update") && taken.listingId) {
+        await db
+          .update(listings)
+          .set({ status: "publishing", updatedAt: new Date() })
+          .where(eq(listings.id, taken.listingId));
+      }
+      await audit({
+        actor: agent,
+        action: "job_running",
+        entity: "jobs",
+        entityId: taken.id,
+        after: { status: "running" },
+      });
+      return taken;
     }
-    await audit({
-      actor: agent,
-      action: "job_running",
-      entity: "jobs",
-      entityId: taken.id,
-      after: { status: "running" },
-    });
-    return taken;
   }
   return null;
 }
@@ -173,56 +207,79 @@ export async function completeJob(
   const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
   if (!job || job.status !== "running") throw new AppError("Задача не выполняется");
 
-  if (job.type === "promo" && input.status === "done") {
-    const spent = Number.isInteger(input.spentRub) ? Number(input.spentRub) : Number(job.payload.max_rub ?? 0);
-    const { recordPromoSpend } = await import("./promo");
-    await recordPromoSpend(job.userId, spent, job.id);
-  }
-
+  const listingDone = (job.type === "publish" || job.type === "update") && Boolean(job.listingId);
+  const avitoUrl = listingDone && input.status === "done" ? normalizeUrl(input.avitoUrl) : null;
+  const promoSpend =
+    job.type === "promo" && input.status === "done"
+      ? Number.isInteger(input.spentRub)
+        ? Number(input.spentRub)
+        : Number(job.payload.max_rub ?? 0)
+      : null;
   const errorNote = input.errorNote ? redact(input.errorNote).slice(0, 500) : null;
-  const [updated] = await db
-    .update(jobs)
-    .set({
-      status: input.status,
-      finishedAt: new Date(),
-      errorCode: input.status === "failed" ? input.errorCode || "failed" : null,
-      errorNote,
-    })
-    .where(and(eq(jobs.id, jobId), eq(jobs.status, "running")))
-    .returning();
-  if (!updated) throw new AppError("Задача уже закрыта");
 
-  if ((job.type === "publish" || job.type === "update") && job.listingId) {
-    if (input.status === "done") {
-      const avitoUrl = normalizeUrl(input.avitoUrl);
-      await db
-        .update(listings)
-        .set({
-          status: "live",
-          avitoUrl,
-          externalId: input.externalId?.trim() || null,
-          errorNote: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(listings.id, job.listingId));
-      const [listing] = await db.select().from(listings).where(eq(listings.id, job.listingId)).limit(1);
-      await enqueueNotification({
-        userId: job.userId,
-        kind: "published",
-        payload: { title: listing?.title ?? "", url: avitoUrl, listingId: job.listingId },
-      });
-    } else {
-      await db
-        .update(listings)
-        .set({ status: "error", errorNote, updatedAt: new Date() })
-        .where(eq(listings.id, job.listingId));
-      await enqueueNotification({
-        userId: job.userId,
-        kind: "job_failed",
-        channels: ["operator"],
-        payload: { type: job.type, errorCode: input.errorCode || "failed", jobId },
-      });
+  const closed = await db.transaction(async (tx) => {
+    let lowBalance: number | null = null;
+    if (promoSpend !== null) {
+      const { recordPromoSpend } = await import("./promo");
+      const spend = await recordPromoSpend(
+        job.userId,
+        promoSpend,
+        job.id,
+        Number(job.payload.max_rub ?? 0),
+        tx,
+      );
+      if (spend.notifyLow) lowBalance = spend.balance;
     }
+    const [updated] = await tx
+      .update(jobs)
+      .set({
+        status: input.status,
+        finishedAt: new Date(),
+        errorCode: input.status === "failed" ? input.errorCode || "failed" : null,
+        errorNote,
+      })
+      .where(and(eq(jobs.id, jobId), eq(jobs.status, "running")))
+      .returning();
+    if (!updated) throw new AppError("Задача уже закрыта");
+
+    let title = "";
+    if (listingDone && job.listingId) {
+      if (input.status === "done") {
+        const [listing] = await tx
+          .update(listings)
+          .set({
+            status: "live",
+            avitoUrl,
+            externalId: input.externalId?.trim() || null,
+            errorNote: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(listings.id, job.listingId))
+          .returning();
+        title = listing?.title ?? "";
+      } else {
+        await tx
+          .update(listings)
+          .set({ status: "error", errorNote, updatedAt: new Date() })
+          .where(eq(listings.id, job.listingId));
+      }
+    }
+    return { updated, lowBalance, title };
+  });
+
+  if (closed.lowBalance !== null) {
+    await enqueueNotification({
+      userId: job.userId,
+      kind: "low_deposit",
+      payload: { balanceRub: closed.lowBalance },
+    });
+  }
+  if (listingDone && job.listingId && input.status === "done") {
+    await enqueueNotification({
+      userId: job.userId,
+      kind: "published",
+      payload: { title: closed.title, url: avitoUrl, listingId: job.listingId },
+    });
   } else if (input.status === "failed") {
     await enqueueNotification({
       userId: job.userId,
@@ -241,7 +298,7 @@ export async function completeJob(
     after: { status: input.status },
   });
   await dispatchPending();
-  return updated;
+  return closed.updated;
 }
 
 export async function cancelOpenJobs(userId: string, actor: string) {

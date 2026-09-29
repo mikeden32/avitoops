@@ -248,6 +248,7 @@ export const notificationOutbox = pgTable("notification_outbox", {
   status: notifyStatus("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   sentAt: timestamp("sent_at", { withTimezone: true }),
+  attemptAt: timestamp("attempt_at", { withTimezone: true }),
 });
 
 export type Plan = (typeof subPlan.enumValues)[number];
