@@ -1,0 +1,321 @@
+import { and, asc, eq, inArray } from "drizzle-orm";
+import { db } from "../db";
+import { jobs, listings } from "../db/schema";
+import type { JobType } from "../db/schema";
+import { AppError } from "../errors";
+import { clientCanCreate, promoBlockReason } from "../policy";
+import { redact } from "../redact";
+import { audit } from "./audit";
+import { getDepositBalance } from "./billing";
+import { loadGate } from "./gate";
+import { dispatchPending, enqueueNotification } from "./notifications";
+
+const workTypes = new Set<JobType>(["publish", "update", "reply", "promo", "report"]);
+
+export async function enqueueJob(input: {
+  userId: string;
+  type: JobType;
+  payload: Record<string, unknown>;
+  listingId?: string | null;
+  createdBy: string;
+  asAdmin?: boolean;
+}) {
+  if (!input.asAdmin && !clientCanCreate(input.type)) {
+    throw new AppError("Эту задачу может создать только оператор");
+  }
+  if (input.type === "heal_access" && !input.asAdmin) {
+    throw new AppError("Эту задачу может создать только оператор");
+  }
+  const gate = await loadGate(input.userId);
+  if (input.type === "heal_access") {
+    if (gate.access === "green") throw new AppError("Доступ в порядке, смена слота не нужна");
+    const open = await db
+      .select()
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.userId, input.userId),
+          eq(jobs.type, "heal_access"),
+          inArray(jobs.status, ["queued", "running"]),
+        ),
+      )
+      .limit(1);
+    if (open[0]) throw new AppError("Запрос на смену доступа уже создан");
+  } else if (gate.block) {
+    throw new AppError(gate.block);
+  }
+
+  if (input.type === "promo") {
+    const maxRub = Number(input.payload.max_rub ?? 0);
+    const { currentPromo } = await import("./promo");
+    const budget = await currentPromo(input.userId);
+    const depositRub = await getDepositBalance(input.userId);
+    const reason = promoBlockReason({
+      enabled: budget.enabled,
+      weekLimitRub: budget.weekLimitRub,
+      spentRub: budget.spentRub,
+      depositRub,
+      maxRub,
+    });
+    if (reason) throw new AppError(reason);
+  }
+
+  const [job] = await db
+    .insert(jobs)
+    .values({
+      userId: input.userId,
+      listingId: input.listingId ?? null,
+      type: input.type,
+      payload: input.payload,
+      status: "queued",
+      createdBy: input.createdBy,
+    })
+    .returning();
+
+  if ((input.type === "publish" || input.type === "update") && input.listingId) {
+    await db
+      .update(listings)
+      .set({ status: "queued", errorNote: null, updatedAt: new Date() })
+      .where(and(eq(listings.id, input.listingId), eq(listings.userId, input.userId)));
+  }
+
+  await audit({
+    actor: input.createdBy,
+    action: "job_create",
+    entity: "jobs",
+    entityId: job.id,
+    after: { type: job.type, userId: job.userId, status: "queued" },
+  });
+  return job;
+}
+
+export function publicJob(job: typeof jobs.$inferSelect) {
+  return {
+    id: job.id,
+    user_id: job.userId,
+    listing_id: job.listingId,
+    type: job.type,
+    payload: job.payload,
+    status: job.status,
+    created_at: job.createdAt.toISOString(),
+  };
+}
+
+export async function takeNextJob(agent: string) {
+  const queued = await db
+    .select()
+    .from(jobs)
+    .where(eq(jobs.status, "queued"))
+    .orderBy(asc(jobs.createdAt))
+    .limit(100);
+
+  const gates = new Map<string, Awaited<ReturnType<typeof loadGate>>>();
+  for (const job of queued) {
+    let gate = gates.get(job.userId);
+    if (!gate) {
+      gate = await loadGate(job.userId);
+      gates.set(job.userId, gate);
+    }
+    if (job.type === "heal_access") {
+      if (gate.access === "green") continue;
+    } else if (!workTypes.has(job.type) || gate.block) {
+      continue;
+    }
+    if (job.type === "promo") {
+      const { currentPromo } = await import("./promo");
+      const budget = await currentPromo(job.userId);
+      const depositRub = await getDepositBalance(job.userId);
+      const reason = promoBlockReason({
+        enabled: budget.enabled,
+        weekLimitRub: budget.weekLimitRub,
+        spentRub: budget.spentRub,
+        depositRub,
+        maxRub: Number(job.payload.max_rub ?? 0),
+      });
+      if (reason) continue;
+    }
+
+    const [taken] = await db
+      .update(jobs)
+      .set({ status: "running", assignedAgent: agent, startedAt: new Date() })
+      .where(and(eq(jobs.id, job.id), eq(jobs.status, "queued")))
+      .returning();
+    if (!taken) continue;
+    if ((taken.type === "publish" || taken.type === "update") && taken.listingId) {
+      await db
+        .update(listings)
+        .set({ status: "publishing", updatedAt: new Date() })
+        .where(eq(listings.id, taken.listingId));
+    }
+    await audit({
+      actor: agent,
+      action: "job_running",
+      entity: "jobs",
+      entityId: taken.id,
+      after: { status: "running" },
+    });
+    return taken;
+  }
+  return null;
+}
+
+export async function completeJob(
+  jobId: string,
+  input: {
+    status: "done" | "failed";
+    avitoUrl?: string;
+    externalId?: string;
+    errorCode?: string;
+    errorNote?: string;
+    spentRub?: number;
+  },
+) {
+  const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
+  if (!job || job.status !== "running") throw new AppError("Задача не выполняется");
+
+  if (job.type === "promo" && input.status === "done") {
+    const spent = Number.isInteger(input.spentRub) ? Number(input.spentRub) : Number(job.payload.max_rub ?? 0);
+    const { recordPromoSpend } = await import("./promo");
+    await recordPromoSpend(job.userId, spent, job.id);
+  }
+
+  const errorNote = input.errorNote ? redact(input.errorNote).slice(0, 500) : null;
+  const [updated] = await db
+    .update(jobs)
+    .set({
+      status: input.status,
+      finishedAt: new Date(),
+      errorCode: input.status === "failed" ? input.errorCode || "failed" : null,
+      errorNote,
+    })
+    .where(and(eq(jobs.id, jobId), eq(jobs.status, "running")))
+    .returning();
+  if (!updated) throw new AppError("Задача уже закрыта");
+
+  if ((job.type === "publish" || job.type === "update") && job.listingId) {
+    if (input.status === "done") {
+      const avitoUrl = normalizeUrl(input.avitoUrl);
+      await db
+        .update(listings)
+        .set({
+          status: "live",
+          avitoUrl,
+          externalId: input.externalId?.trim() || null,
+          errorNote: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(listings.id, job.listingId));
+      const [listing] = await db.select().from(listings).where(eq(listings.id, job.listingId)).limit(1);
+      await enqueueNotification({
+        userId: job.userId,
+        kind: "published",
+        payload: { title: listing?.title ?? "", url: avitoUrl, listingId: job.listingId },
+      });
+    } else {
+      await db
+        .update(listings)
+        .set({ status: "error", errorNote, updatedAt: new Date() })
+        .where(eq(listings.id, job.listingId));
+      await enqueueNotification({
+        userId: job.userId,
+        kind: "job_failed",
+        channels: ["operator"],
+        payload: { type: job.type, errorCode: input.errorCode || "failed", jobId },
+      });
+    }
+  } else if (input.status === "failed") {
+    await enqueueNotification({
+      userId: job.userId,
+      kind: "job_failed",
+      channels: ["operator"],
+      payload: { type: job.type, errorCode: input.errorCode || "failed", jobId },
+    });
+  }
+
+  await audit({
+    actor: job.assignedAgent || "system",
+    action: "job_status",
+    entity: "jobs",
+    entityId: job.id,
+    before: { status: "running" },
+    after: { status: input.status },
+  });
+  await dispatchPending();
+  return updated;
+}
+
+export async function cancelOpenJobs(userId: string, actor: string) {
+  const open = await db
+    .select()
+    .from(jobs)
+    .where(and(eq(jobs.userId, userId), inArray(jobs.status, ["queued", "running"])));
+  for (const job of open) {
+    if (job.type === "heal_access") continue;
+    await db
+      .update(jobs)
+      .set({ status: "canceled", finishedAt: new Date(), errorCode: "stopped" })
+      .where(eq(jobs.id, job.id));
+    if (job.listingId && (job.type === "publish" || job.type === "update")) {
+      const [listing] = await db.select().from(listings).where(eq(listings.id, job.listingId)).limit(1);
+      if (listing && (listing.status === "queued" || listing.status === "publishing")) {
+        await db
+          .update(listings)
+          .set({
+            status: listing.avitoUrl ? "live" : "paused",
+            updatedAt: new Date(),
+          })
+          .where(eq(listings.id, listing.id));
+      }
+    }
+    await audit({
+      actor,
+      action: "job_status",
+      entity: "jobs",
+      entityId: job.id,
+      before: { status: job.status },
+      after: { status: "canceled" },
+    });
+  }
+}
+
+export async function cancelJob(actor: string, jobId: string) {
+  const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
+  if (!job) throw new AppError("Задача не найдена");
+  if (job.status !== "queued" && job.status !== "running") {
+    throw new AppError("Задача уже закрыта");
+  }
+  await db
+    .update(jobs)
+    .set({ status: "canceled", finishedAt: new Date(), errorCode: "canceled" })
+    .where(eq(jobs.id, jobId));
+  if (job.listingId && (job.type === "publish" || job.type === "update")) {
+    const [listing] = await db.select().from(listings).where(eq(listings.id, job.listingId)).limit(1);
+    if (listing && (listing.status === "queued" || listing.status === "publishing")) {
+      await db
+        .update(listings)
+        .set({ status: listing.avitoUrl ? "live" : "paused", updatedAt: new Date() })
+        .where(eq(listings.id, listing.id));
+    }
+  }
+  await audit({
+    actor,
+    action: "job_status",
+    entity: "jobs",
+    entityId: jobId,
+    before: { status: job.status },
+    after: { status: "canceled" },
+  });
+}
+
+function normalizeUrl(value?: string) {
+  if (!value?.trim()) throw new AppError("Нужна ссылка на объявление");
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new AppError("Ссылка на объявление некорректна");
+  }
+  if (url.username || url.password) throw new AppError("Ссылка не должна содержать логин");
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new AppError("Нужна http(s) ссылка");
+  return url.toString();
+}
