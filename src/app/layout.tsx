@@ -8,15 +8,18 @@ import "./globals.css";
 const manrope = Manrope({ subsets: ["latin", "cyrillic"], variable: "--font-manrope" });
 
 export const metadata: Metadata = {
-  title: "AvitoOps — Авито-помощник",
+  title: {
+    default: "AvitoOps — Авито ведут за Вас",
+    template: "%s — AvitoOps",
+  },
   description:
-    "Вы ставите задачи — мы ведём Авито: публикации, ответы, продвижение и рутина кабинета.",
+    "Напишите или скажите OPS, что продаёте. Карточка собирается в разговоре.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ru">
-      <body className={`${manrope.variable} min-h-screen pb-24 antialiased`}>
+      <body className={`${manrope.variable} min-h-screen pb-32 antialiased`}>
         <CuratorProvider>
           {children}
           <CookieConsent />

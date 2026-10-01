@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db";
-import { listings, subscriptions } from "../db/schema";
+import { listings, subscriptions, users } from "../db/schema";
 import type { ListingStatus } from "../db/schema";
 import { AppError } from "../errors";
 import { assertUploads, safeJoin, saveUploads, type Upload } from "../files";
@@ -24,13 +24,18 @@ const sendable = new Set<ListingStatus>(["draft", "error", "paused"]);
 
 async function assertCanCreate(userId: string) {
   const profile = await getProfile(userId);
-  if (!profile) throw new AppError("Сначала заполните онбординг");
+  const [person] = await db
+    .select({ consent: users.cabinetConsentAt })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  if (!profile && !person?.consent) throw new AppError("Сначала нужно согласие на ведение кабинета");
   const [sub] = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).limit(1);
   if (
     sub?.paymentProvider === "trial" &&
     (sub.status !== "active" || sub.currentPeriodEnd.getTime() <= Date.now())
   ) {
-    throw new AppError("Пробный день закончился. Чтобы продолжить, нужна оплата тарифа.");
+    throw new AppError("Пробные сутки закончились. Чтобы продолжить, нужна оплата тарифа.");
   }
   if (!sub || (sub.status !== "active" && sub.status !== "past_due")) {
     throw new AppError("Создавать объявления можно после оплаты тарифа");
@@ -42,6 +47,7 @@ export async function createListing(
   input: ListingInput,
   uploads: Upload[],
   intent: "draft" | "send",
+  options?: { allowEmptyPhoto?: boolean },
 ) {
   validateListing(input);
   assertUploads(uploads);
@@ -63,6 +69,7 @@ export async function createListing(
       status: "draft",
     })
     .returning();
+  if (uploads.length === 0 && options?.allowEmptyPhoto) return created;
   let photos: string[];
   try {
     photos = await saveUploads(userId, created.id, uploads);
@@ -120,7 +127,7 @@ export async function updateListing(
   assertUploads(uploads, photos.length);
   const added = await saveUploads(userId, listing.id, uploads);
   const nextPhotos = [...photos, ...added];
-  if (nextPhotos.length === 0) throw new AppError("Добавьте хотя бы одно фото");
+  if (nextPhotos.length === 0 && intent !== "draft") throw new AppError("Добавьте хотя бы одно фото");
   const changed = changedFields(listing, input, nextPhotos);
   const [saved] = await db
     .update(listings)
@@ -177,6 +184,25 @@ export async function movePhoto(userId: string, listingId: string, filename: str
     .update(listings)
     .set({ photos, updatedAt: new Date() })
     .where(eq(listings.id, listingId))
+    .returning();
+  return saved;
+}
+
+export async function replaceListingPhoto(userId: string, listingId: string, uploads: Upload[]) {
+  const listing = await ownListing(userId, listingId);
+  if (listing.status === "queued" || listing.status === "publishing") {
+    throw new AppError("Объявление уже в работе");
+  }
+  assertUploads(uploads);
+  const added = await saveUploads(userId, listing.id, uploads);
+  if (added.length === 0) throw new AppError("Добавьте хотя бы одно фото");
+  for (const name of listing.photos) {
+    await rm(safeJoin(userId, listing.id, name), { force: true });
+  }
+  const [saved] = await db
+    .update(listings)
+    .set({ photos: added, updatedAt: new Date() })
+    .where(and(eq(listings.id, listingId), eq(listings.userId, userId)))
     .returning();
   return saved;
 }

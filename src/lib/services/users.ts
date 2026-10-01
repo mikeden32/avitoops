@@ -1,12 +1,14 @@
+import { randomBytes } from "node:crypto";
 import { hash, compare } from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { accessStatus, avitoAccounts, promoBudgets, subscriptions, users } from "../db/schema";
 import { AppError } from "../errors";
+import { isPlan } from "../plans";
 import { moscowWeekStart } from "../week";
 import { audit } from "./audit";
 
-export async function registerUser(input: { email: string; password: string; phone?: string }) {
+export async function registerUser(input: { email: string; password: string; phone?: string; plan?: string }) {
   const email = input.email.trim().toLowerCase();
   const passwordHash = await hash(input.password, 10);
   try {
@@ -31,7 +33,7 @@ export async function registerUser(input: { email: string; password: string; pho
       });
       await tx.insert(subscriptions).values({
         userId: user.id,
-        plan: "scale",
+        plan: input.plan && isPlan(input.plan) ? input.plan : "start",
         status: "active",
         currentPeriodEnd: new Date(Date.now() + 24 * 60 * 60 * 1000),
         paymentProvider: "trial",
@@ -44,6 +46,54 @@ export async function registerUser(input: { email: string; password: string; pho
     }
     throw error;
   }
+}
+
+export async function ensureOAuthClient(email: string, plan: string | null) {
+  const normalized = email.trim().toLowerCase();
+  const [existing] = await db.select().from(users).where(eq(users.email, normalized)).limit(1);
+  if (existing) return existing;
+  const passwordHash = await hash(randomBytes(32).toString("base64url"), 10);
+  let created;
+  try {
+    created = await db.transaction(async (tx) => {
+      const [user] = await tx
+        .insert(users)
+        .values({
+          email: normalized,
+          role: "client",
+          passwordHash,
+        })
+        .returning();
+      await tx.insert(avitoAccounts).values({ userId: user.id, status: "pending" });
+      await tx.insert(accessStatus).values({ userId: user.id, state: "green" });
+      await tx.insert(promoBudgets).values({
+        userId: user.id,
+        weekLimitRub: 0,
+        spentRub: 0,
+        enabled: false,
+        weekStart: moscowWeekStart(),
+      });
+      await tx.insert(subscriptions).values({
+        userId: user.id,
+        plan: plan && isPlan(plan) ? plan : "start",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        paymentProvider: "trial",
+      });
+      return user;
+    });
+  } catch (error) {
+    if (typeof error === "object" && error && "code" in error && error.code === "23505") {
+      const [again] = await db.select().from(users).where(eq(users.email, normalized)).limit(1);
+      if (again) return again;
+    }
+    throw error;
+  }
+  if (plan && isPlan(plan)) {
+    const { createSubscriptionRequest } = await import("./billing");
+    await createSubscriptionRequest(created.id, plan);
+  }
+  return created;
 }
 
 export async function verifyUser(email: string, password: string) {

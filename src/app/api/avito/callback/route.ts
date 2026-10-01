@@ -26,5 +26,5 @@ export async function GET(req: Request) {
   } catch {
     redirect("/app/settings?error=Не+удалось+подключить+Авито");
   }
-  redirect("/app/settings?ok=avito");
+  redirect("/app?avito=1");
 }

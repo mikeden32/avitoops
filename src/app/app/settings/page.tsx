@@ -36,9 +36,12 @@ export default async function SettingsPage({
             : "не подключён"}
         </p>
         {data.avitoStatus === "connected" ? null : (
-          <a className={buttonClass()} href="/api/avito/connect">
-            Подключить Авито
-          </a>
+          <div className="grid gap-2">
+            <p className="text-sm">Пароль не нужен. Откроется страница Авито.</p>
+            <a className={`${buttonClass()} w-fit`} href="/api/avito/connect">
+              Подключить Авито
+            </a>
+          </div>
         )}
         <button className={buttonClass()}>Сохранить контакты</button>
       </form>

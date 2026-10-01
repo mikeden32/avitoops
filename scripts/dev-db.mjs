@@ -1,4 +1,5 @@
 import EmbeddedPostgres from "embedded-postgres";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -12,7 +13,9 @@ const pg = new EmbeddedPostgres({
   persistent: true,
 });
 
-await pg.initialise();
+if (!fs.existsSync(path.join(databaseDir, "PG_VERSION"))) {
+  await pg.initialise();
+}
 await pg.start();
 try {
   await pg.createDatabase("avitoops");

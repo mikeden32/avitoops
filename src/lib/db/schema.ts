@@ -6,6 +6,7 @@ import {
   pgEnum,
   pgTable,
   text,
+  index,
   timestamp,
   uniqueIndex,
   uuid,
@@ -68,6 +69,7 @@ export const users = pgTable("users", {
   telegram: text("telegram"),
   role: userRole("role").notNull().default("client"),
   passwordHash: text("password_hash").notNull(),
+  cabinetConsentAt: timestamp("cabinet_consent_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -241,6 +243,72 @@ export const auditEvents = pgTable("audit_events", {
   entityId: text("entity_id"),
   before: jsonb("before").$type<Record<string, unknown> | null>(),
   after: jsonb("after").$type<Record<string, unknown> | null>(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const deskTasks = pgTable("desk_tasks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id),
+  listingId: uuid("listing_id").references(() => listings.id),
+  role: text("role").notNull(),
+  status: text("status").notNull().default("queued"),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+});
+
+export const curatorOffers = pgTable("curator_offers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id),
+  action: text("action").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+  status: text("status").notNull().default("open"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const guestDrafts = pgTable(
+  "guest_drafts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tokenHash: text("token_hash").notNull(),
+    status: text("status").notNull().default("active"),
+    product: text("product"),
+    location: text("location"),
+    price: integer("price"),
+    title: text("title"),
+    description: text("description"),
+    attributes: jsonb("attributes").$type<Record<string, string>>().notNull().default({}),
+    visibleTranscript: jsonb("visible_transcript")
+      .$type<{ role: "user" | "assistant"; content: string; at: string }[]>()
+      .notNull()
+      .default([]),
+    missingFields: jsonb("missing_fields").$type<string[]>().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    claimedByUserId: uuid("claimed_by_user_id").references(() => users.id, { onDelete: "cascade" }),
+    claimedListingId: uuid("claimed_listing_id").references(() => listings.id, { onDelete: "set null" }),
+  },
+  (table) => [
+    uniqueIndex("guest_drafts_token_hash_unique").on(table.tokenHash),
+    index("guest_drafts_claimed_by_user_id_idx").on(table.claimedByUserId),
+    index("guest_drafts_status_expires_idx").on(table.status, table.expiresAt),
+  ],
+);
+
+export const curatorLines = pgTable("curator_lines", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id),
+  role: text("role").notNull(),
+  content: text("content").notNull(),
+  cardHref: text("card_href"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

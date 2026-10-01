@@ -86,7 +86,7 @@ export async function templateReply(userId: string, digestId: string) {
     .limit(1);
   if (!row) throw new AppError("Лид не найден");
   if (row.status === "handled") throw new AppError("Лид уже обработан");
-  if (!(await replySlotOpen(userId))) throw new AppError("Ответим завтра утром");
+  if (!(await replySlotOpen(userId))) throw new AppError("Ответим завтра");
   const [claimed] = await db
     .update(messagesDigest)
     .set({ status: "handled", repliedAt: new Date() })
@@ -118,7 +118,7 @@ export async function templateReply(userId: string, digestId: string) {
 }
 
 export async function releaseReply(digestId: string) {
-  if (!digestId) return;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(digestId)) return;
   await db
     .update(messagesDigest)
     .set({ status: "new", repliedAt: null })

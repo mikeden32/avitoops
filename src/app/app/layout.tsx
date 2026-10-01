@@ -1,4 +1,5 @@
 import { PublicHeader } from "@/components/public-header";
+import { CabinetLinks } from "@/components/desk-board";
 import { CabinetNav } from "@/components/cabinet-nav";
 import { requireClient } from "@/lib/session";
 import { loadDashboard } from "@/lib/queries/cabinet";
@@ -19,12 +20,16 @@ export default async function CabinetLayout({ children }: { children: React.Reac
             {accessLabel(dash.access)}. Новые публикации, правки и ответы не стартуют.
           </p>
         ) : null}
-        {!dash.hasProfile ? (
+        {dash.consented && !dash.avitoConnected ? (
           <p className="rounded-xl border border-line bg-card px-3 py-2 text-sm">
-                Заполните анкету, чтобы загрузить объявления. <a href="/app/onboarding">Открыть</a>
+            Пароль не нужен. Откроется страница Авито.{" "}
+            <a className="font-semibold underline" href="/api/avito/connect">
+              Перейти в Авито
+            </a>
           </p>
         ) : null}
         {children}
+        <CabinetLinks />
       </div>
     </>
   );

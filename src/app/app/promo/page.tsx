@@ -1,19 +1,45 @@
+import { AgentLine, deskWord } from "@/components/agent-sheet";
+import { DeskPulse } from "@/components/desk-board";
 import { Banner, Field, PageTitle, buttonClass } from "@/components/ui";
 import { formatRub } from "@/lib/format";
 import { loadPromo } from "@/lib/queries/cabinet";
+import { loadStudio } from "@/lib/services/studio";
 import { requireClient } from "@/lib/session";
 import { promoJobAction, promoSettingsAction } from "@/server/cabinet-actions";
+import { placePromoAction } from "@/server/studio-actions";
 
 export default async function PromoPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; ok?: string }>;
+  searchParams: Promise<{ error?: string; ok?: string; note?: string }>;
 }) {
   const user = await requireClient();
   const data = await loadPromo(user.id);
+  const studio = await loadStudio(user.id);
   const params = await searchParams;
+  const state = studio.desk.marks.promo.state;
   return (
     <main className="grid gap-4">
+      <DeskPulse live={state === "work"} />
+      <section className="grid gap-3 rounded-[28px] border border-line bg-white p-5">
+        <div>
+          <h1 className="text-2xl font-extrabold">Менеджер продвижения</h1>
+          <p className="text-sm text-muted">{deskWord(state)}</p>
+        </div>
+        {state === "work" ? <AgentLine>Менеджер продвижения считает ставку</AgentLine> : null}
+        <p>{studio.listing ? studio.listing.title : "Объявление ещё не собрано."}</p>
+        <p className="text-sm">
+          Депозит: {formatRub(studio.depositRub)}. Расход недели: {formatRub(studio.spentRub)} из{" "}
+          {formatRub(studio.weekLimitRub)}.
+        </p>
+        {studio.promoRub > 0 ? <p>Сумма: {formatRub(studio.promoRub)}</p> : <p>Сумму называете вы. В первое объявление ставка сама не входит.</p>}
+        {params.note ? <p className="text-sm">{params.note}</p> : null}
+        <form action={placePromoAction}>
+          <button className={buttonClass()} disabled={studio.promoRub <= 0}>
+            Поставить
+          </button>
+        </form>
+      </section>
       <PageTitle title="Продвижение" text="Реклама списывается с депозита и не выходит за недельный лимит." />
       <Banner message={params.error} />
       {params.ok ? <p className="text-sm text-good">Сохранено</p> : null}

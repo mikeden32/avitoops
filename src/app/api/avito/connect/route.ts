@@ -8,7 +8,7 @@ export async function GET() {
   const session = await auth();
   if (!session?.user || session.user.role !== "client") redirect("/login");
   if (!avitoAppConfigured()) {
-    redirect("/app/settings?error=Сначала+задайте+ключи+приложения+Авито+на+сервере");
+    redirect("/app?error=" + encodeURIComponent("Страница Авито откроется, когда подключение будет готово. Пароль вводить не нужно."));
   }
   redirect(avitoAuthorizeUrl(session.user.id));
 }

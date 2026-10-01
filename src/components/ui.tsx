@@ -37,9 +37,13 @@ export function Field({
   );
 }
 
-export function Banner({ message }: { message?: string }) {
+export function Banner({ message, id }: { message?: string; id?: string }) {
   if (!message) return null;
-  return <p className="rounded-xl border border-bad/30 bg-white px-3 py-2 text-sm text-bad">{message}</p>;
+  return (
+    <p id={id} role="alert" className="rounded-xl border border-bad/30 bg-white px-3 py-2 text-sm text-bad">
+      {message}
+    </p>
+  );
 }
 
 export function Notice({ message }: { message?: string }) {

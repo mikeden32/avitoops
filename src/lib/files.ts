@@ -87,6 +87,16 @@ async function encode(bytes: Buffer, edge: number, quality: number) {
   }
 }
 
+export function inboxFile(userId: string, filename: string) {
+  if (!/^[\w-]+$/.test(userId) || !/^[\w.-]+$/.test(filename)) {
+    throw new AppError("Некорректное имя файла");
+  }
+  const root = path.resolve(process.cwd(), "storage", "inbox");
+  const full = path.resolve(root, userId, filename);
+  if (!full.startsWith(root + path.sep)) throw new AppError("Некорректный путь");
+  return full;
+}
+
 function sniffImage(bytes: Buffer) {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return true;
   if (

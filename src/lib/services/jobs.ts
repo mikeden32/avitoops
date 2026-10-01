@@ -7,8 +7,9 @@ import { clientCanCreate, promoBlockReason } from "../policy";
 import { redact } from "../redact";
 import { audit } from "./audit";
 import { getDepositBalance } from "./billing";
-import { dailyStartBlock } from "./daily";
+import { dailyStartBlock, queuedCount, startedToday, trialLive } from "./daily";
 import { loadGate } from "./gate";
+import { designPending } from "./desk";
 import { releaseReply } from "./leads";
 import { dispatchPending, enqueueNotification } from "./notifications";
 
@@ -45,6 +46,20 @@ export async function enqueueJob(input: {
     if (open[0]) throw new AppError("Запрос на смену доступа уже создан");
   } else if (gate.block) {
     throw new AppError(gate.block);
+  }
+
+  if (input.type === "publish" && input.listingId) {
+    const [listing] = await db
+      .select({ photos: listings.photos })
+      .from(listings)
+      .where(and(eq(listings.id, input.listingId), eq(listings.userId, input.userId)))
+      .limit(1);
+    if (listing && listing.photos.length === 0) throw new AppError("Без кадра в Авито не отправлю.");
+  }
+
+  if (input.type === "publish" && (await trialLive(input.userId))) {
+    const used = (await startedToday(input.userId, "publish")) + (await queuedCount(input.userId, "publish"));
+    if (used >= 1) throw new AppError("В пробные сутки можно выложить одно объявление.");
   }
 
   if ((input.type === "publish" || input.type === "update") && input.listingId) {
@@ -186,7 +201,8 @@ export async function takeNextJob(agent: string, types?: JobType[]) {
         });
         if (reason) continue;
       }
-      if (await dailyStartBlock(job.userId, job.type)) continue;
+      if (job.type === "publish" && job.listingId && (await designPending(job.listingId))) continue;
+      if (await dailyStartBlock(job.userId, job.type, job)) continue;
 
       const [taken] = await db
         .update(jobs)

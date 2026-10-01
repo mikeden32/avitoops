@@ -18,13 +18,11 @@ export function workBlockReason(input: {
   if (!sub) return "Нет активной подписки";
   if (sub.status === "paused") return "Сервис на паузе";
   if (sub.status === "canceled") return "Подписка отменена";
-  if (
-    sub.paymentProvider === "trial" &&
-    (sub.status !== "active" || sub.currentPeriodEnd.getTime() <= now.getTime())
-  ) {
-    return "Пробный день тарифа Сеть закончился. Выберите тариф и отправьте заявку на оплату.";
-  }
-  if (sub.status === "past_due") {
+  if (sub.paymentProvider === "trial") {
+    if (sub.status !== "active" || sub.currentPeriodEnd.getTime() <= now.getTime()) {
+      return "Пробные сутки закончились. Чтобы начать работу, нужна оплата выбранного тарифа.";
+    }
+  } else if (sub.status === "past_due") {
     const graceEnd = sub.currentPeriodEnd.getTime() + 3 * DAY;
     if (now.getTime() > graceEnd) return "Оплата просрочена больше 3 дней";
   } else if (sub.status !== "active") {

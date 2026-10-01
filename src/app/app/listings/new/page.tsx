@@ -12,7 +12,10 @@ export default async function NewListingPage({
   const params = await searchParams;
   return (
     <main className="grid gap-4">
-      <PageTitle title="Ручной ввод объявления" text="Поля заполняете сами. Авито-куратор в углу экрана подскажет, из чата объявление не создаёт." />
+      <PageTitle
+        title="Объявление"
+        text="Объявление заводится разговором с OPS. Форма ниже — если удобнее руками."
+      />
       <ListingForm action={createListingAction} error={params.error} />
     </main>
   );

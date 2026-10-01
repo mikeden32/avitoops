@@ -4,12 +4,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const links = [
-  ["/app", "Обзор"],
-  ["/app/listings", "Объявления"],
-  ["/app/leads", "Лиды"],
+  ["/app", "Сейчас"],
+  ["/app/copy", "Копирайтер"],
+  ["/app/design", "Дизайнер"],
   ["/app/promo", "Продвижение"],
-  ["/app/billing", "Биллинг"],
-  ["/app/settings", "Настройки"],
+  ["/app/reply", "Переписка"],
 ];
 
 export function CabinetNav() {
@@ -17,7 +16,7 @@ export function CabinetNav() {
   return (
     <nav className="flex gap-2 overflow-x-auto text-sm">
       {links.map(([href, label]) => {
-        const active = href === "/app" ? pathname === href : pathname.startsWith(href);
+        const active = href === "/app" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
         return (
           <Link
             key={href}

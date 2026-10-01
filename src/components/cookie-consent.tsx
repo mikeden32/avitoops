@@ -29,16 +29,18 @@ export function CookieConsent() {
   if (!visible) return null;
 
   return (
-    <div className="fixed bottom-20 left-4 z-40 w-[min(100vw-2rem,26rem)] rounded-[20px] border border-line bg-card p-4 shadow-[0_16px_40px_rgba(20,20,20,0.16)]">
+    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-card px-4 py-3 shadow-[0_-8px_24px_rgba(20,20,20,0.08)]">
+      <div className="shell flex flex-wrap items-center justify-between gap-3">
       <p className="text-sm">
         Мы используем cookie, чтобы после входа вы оставались в кабинете. Рекламных cookie нет.{" "}
         <Link href="/consent#cookies" className="font-semibold text-ink underline">
           Подробнее
         </Link>
       </p>
-      <button type="button" className={`${buttonClass()} mt-3`} onClick={accept}>
+      <button type="button" className={buttonClass()} onClick={accept}>
         Согласен
       </button>
+      </div>
     </div>
   );
 }

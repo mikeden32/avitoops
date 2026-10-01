@@ -3,13 +3,14 @@ import { db } from "../db";
 import {
   avitoAccounts,
   clientProfiles,
+  users,
   jobs,
   listings,
   messagesDigest,
   paymentRequests,
   subscriptions,
 } from "../db/schema";
-import { DAILY_QUOTA, isPlan } from "../plans";
+import { DAILY_QUOTA, TRIAL_QUOTA, isPlan } from "../plans";
 import { assertNoSecrets } from "../redact";
 import { queuedCount, startedToday } from "../services/daily";
 import { getDepositBalance, listLedger } from "../services/billing";
@@ -27,7 +28,11 @@ export async function loadDashboard(userId: string) {
     .from(messagesDigest)
     .where(and(eq(messagesDigest.userId, userId), eq(messagesDigest.status, "new")));
   const plan = gate.subscription?.plan ?? null;
-  const publishQuota = plan && isPlan(plan) ? DAILY_QUOTA[plan].publish : 0;
+  const trialLive =
+    gate.subscription?.paymentProvider === "trial" &&
+    gate.subscription.status === "active" &&
+    gate.subscription.currentPeriodEnd.getTime() > Date.now();
+  const publishQuota = trialLive ? TRIAL_QUOTA.publish : plan && isPlan(plan) ? DAILY_QUOTA[plan].publish : 0;
   const publishStarted = publishQuota ? await startedToday(userId, "publish") : 0;
   const publishQueued = await queuedCount(userId, "publish");
   const depositRub = await getDepositBalance(userId);
@@ -35,6 +40,16 @@ export async function loadDashboard(userId: string) {
     .select({ companyName: clientProfiles.companyName })
     .from(clientProfiles)
     .where(eq(clientProfiles.userId, userId))
+    .limit(1);
+  const [avito] = await db
+    .select({ status: avitoAccounts.status })
+    .from(avitoAccounts)
+    .where(eq(avitoAccounts.userId, userId))
+    .limit(1);
+  const [person] = await db
+    .select({ consent: users.cabinetConsentAt })
+    .from(users)
+    .where(eq(users.id, userId))
     .limit(1);
   const data = {
     access: gate.access,
@@ -50,6 +65,8 @@ export async function loadDashboard(userId: string) {
     depositRub,
     hasProfile: Boolean(profile[0]),
     trial: gate.subscription?.paymentProvider === "trial",
+    avitoConnected: avito?.status === "connected",
+    consented: Boolean(person?.consent),
   };
   assertNoSecrets(data);
   return data;

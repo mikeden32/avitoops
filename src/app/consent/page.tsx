@@ -1,5 +1,8 @@
+import type { Metadata } from "next";
 import { PublicHeader } from "@/components/public-header";
 import { SiteFooter } from "@/components/site-footer";
+
+export const metadata: Metadata = { title: "Согласие на обработку данных" };
 
 export default function ConsentPage() {
   return (
@@ -7,7 +10,6 @@ export default function ConsentPage() {
       <PublicHeader />
       <main className="shell grid gap-4 py-12">
         <div className="grid max-w-3xl gap-4">
-        <p className="w-fit rounded-full bg-warn/10 px-3 py-1 text-sm text-warn">Черновик, не для публичного запуска</p>
         <h1 className="text-3xl font-extrabold tracking-tight">Согласие на обработку данных</h1>
         <p>
           Для кабинета мы обрабатываем email, телефон, Telegram, сведения об объявлениях и статус доступа к Авито.
@@ -19,9 +21,8 @@ export default function ConsentPage() {
         </p>
         <p id="cookies">
           Cookie на сайте технические: они запоминают вход в кабинет. Рекламных и сторонних cookie для слежки мы не ставим.
-          Кнопка «Согласен» внизу страницы сохраняет ваше согласие в этом браузере.
+          Кнопка «Согласен» в полосе cookie на любой странице сохраняет ваше согласие в этом браузере.
         </p>
-        <p>Юридическую редакцию согласия нужно утвердить до публичного запуска.</p>
         </div>
       </main>
       <SiteFooter />

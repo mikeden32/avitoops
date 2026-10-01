@@ -82,17 +82,39 @@ try {
   });
   const [trial] = await db.select().from(subscriptions).where(eq(subscriptions.userId, user.id));
   check(
-    "new user gets one day of scale",
-    trial?.plan === "scale" &&
-      trial.paymentProvider === "trial" &&
+    "trial day does not grant the scale quota",
+    trial?.plan !== "scale" &&
+      trial?.paymentProvider === "trial" &&
       trial.status === "active" &&
       trial.currentPeriodEnd.getTime() > Date.now() &&
-      trial.currentPeriodEnd.getTime() < Date.now() + 25 * 60 * 60 * 1000 &&
-      DAILY_QUOTA.scale.publish === 20 &&
+      trial.currentPeriodEnd.getTime() < Date.now() + 25 * 60 * 60 * 1000,
+  );
+  check(
+    "scale tariff keeps its daily numbers",
+    DAILY_QUOTA.scale.publish === 20 &&
       DAILY_QUOTA.scale.update === 20 &&
       DAILY_QUOTA.scale.promo === 20 &&
       DAILY_QUOTA.scale.replies === 200,
   );
+  const trialPublish = await enqueueJob({
+    userId: user.id,
+    type: "publish",
+    payload: { listing_id: "none" },
+    createdBy: user.id,
+  });
+  check("trial starts one publish", Boolean(trialPublish.id));
+  await fails("trial does not start a second publish", () =>
+    enqueueJob({
+      userId: user.id,
+      type: "publish",
+      payload: { listing_id: "none" },
+      createdBy: user.id,
+    }),
+  );
+  await db
+    .update(jobs)
+    .set({ status: "canceled", finishedAt: new Date(), errorCode: "accept_reset" })
+    .where(eq(jobs.id, trialPublish.id));
 
   const subRequest = await createSubscriptionRequest(user.id, "start");
   await confirmPayment("accept", subRequest.id);
@@ -570,6 +592,184 @@ try {
   check("no cabinet listing cap on business", businessCards.length === 11);
 
   check("logs redact proxy", !redact("connect 10.0.0.8:3128 password=secret").includes("10.0.0.8"));
+
+  await db
+    .update(jobs)
+    .set({ status: "canceled", finishedAt: new Date(), errorCode: "accept_reset" })
+    .where(inArray(jobs.status, ["queued", "running"]));
+  const { curatorTurn, routeBuyerMessage } = await import("../src/lib/services/dispatch");
+  const { slotsTaken } = await import("../src/lib/services/daily");
+  const { addDeskTask } = await import("../src/lib/services/desk");
+  const { clientSpeechOk } = await import("../src/lib/curator");
+  const { curatorLines, deskTasks, users } = await import("../src/lib/db/schema");
+  const deskUser = await registerUser({ email: `desk-${stamp}@test.local`, password: "password-1", plan: "start" });
+  const deskPay = await createSubscriptionRequest(deskUser.id, "start");
+  await confirmPayment("accept", deskPay.id);
+  await db
+    .update(avitoAccounts)
+    .set({ status: "connected", refreshToken: "accept-refresh", avitoUserId: "300" })
+    .where(eq(avitoAccounts.userId, deskUser.id));
+  await db.update(users).set({ cabinetConsentAt: new Date() }).where(eq(users.id, deskUser.id));
+
+  async function deskJobs() {
+    return db.select().from(jobs).where(eq(jobs.userId, deskUser.id));
+  }
+  async function deskRows() {
+    return db.select().from(deskTasks).where(eq(deskTasks.userId, deskUser.id));
+  }
+
+  const beforeAsk = (await deskJobs()).length + (await deskRows()).length;
+  await curatorTurn(deskUser.id, "выложи диван за 15 тысяч в Туле", photo("sofa.png"));
+  check("before yes the desk is empty", (await deskJobs()).length + (await deskRows()).length === beforeAsk);
+  const listed = await curatorTurn(deskUser.id, "да", photo("sofa.png"));
+  const deskAfter = await deskRows();
+  const jobsAfter = await deskJobs();
+  check(
+    "yes creates copy, design and publish",
+    deskAfter.some((row) => row.role === "copy") &&
+      deskAfter.some((row) => row.role === "design") &&
+      jobsAfter.some((row) => row.type === "publish") &&
+      (await slotsTaken(deskUser.id, "publish")) === 1 &&
+      clientSpeechOk(listed.reply),
+  );
+  const firstPublish = jobsAfter.find((row) => row.type === "publish");
+  const takenDesk = await takeJob();
+  check("publish starts the same day", takenDesk?.id === firstPublish?.id && takenDesk?.type === "publish");
+  if (takenDesk) await finish(takenDesk.id);
+
+  for (const item of [
+    ["шкаф", "9", "b.png"],
+    ["стол", "8", "c.png"],
+  ] as const) {
+    await curatorTurn(deskUser.id, `выложи ${item[0]} за ${item[1]} тысяч в Туле`, photo(item[2]));
+    await curatorTurn(deskUser.id, "да");
+    const job = await takeJob();
+    if (job?.user_id === deskUser.id) await finish(job.id);
+  }
+  check("three publishes occupy the day", (await slotsTaken(deskUser.id, "publish")) === 3);
+  const beforeFourth = (await deskJobs()).filter((row) => row.type === "publish").length;
+  await curatorTurn(deskUser.id, "выложи кресло за 7 тысяч в Туле", photo("d.png"));
+  const fourth = await curatorTurn(deskUser.id, "да");
+  const fourthJobs = (await deskJobs()).filter((row) => row.type === "publish");
+  check(
+    "fourth publish does not start",
+    fourth.reply.includes("Норма этих суток") &&
+      clientSpeechOk(fourth.reply) &&
+      fourthJobs.length === beforeFourth + 1 &&
+      (await slotsTaken(deskUser.id, "publish")) === 3 &&
+      (await takeJob()) === null,
+  );
+
+  await saveProfile(deskUser.id, {
+    companyName: "Стол",
+    phone: "+70000000020",
+    avitoPhone: "+70000000021",
+    workMode: "own_cabinet",
+    cities: ["Тула"],
+    categories: ["Товары"],
+    escalateRules: "скидку",
+    consent: true,
+  });
+  const ordinary = await routeBuyerMessage(deskUser.id, "Диван ещё продаётся?", "desk-chat:1");
+  const ordinaryRow = await db
+    .select()
+    .from(messagesDigest)
+    .where(and(eq(messagesDigest.userId, deskUser.id), eq(messagesDigest.externalRef, "desk-chat:1")));
+  check(
+    "ordinary buyer message goes to replies without another yes",
+    ordinary === "reply" && ordinaryRow[0]?.repliedAt == null && ordinaryRow[0]?.status === "new",
+  );
+  await routeBuyerMessage(deskUser.id, "Можно скидку?", "desk-chat:2");
+  const discountRow = await db
+    .select()
+    .from(messagesDigest)
+    .where(eq(messagesDigest.externalRef, "desk-chat:2"));
+  const discountLine = await db
+    .select()
+    .from(curatorLines)
+    .where(eq(curatorLines.userId, deskUser.id));
+  const discountReply = await db
+    .select()
+    .from(deskTasks)
+    .where(and(eq(deskTasks.userId, deskUser.id), eq(deskTasks.role, "reply")));
+  check(
+    "discount reaches the curator and not Avito",
+    discountRow[0]?.status === "escalated_to_client" &&
+      discountRow[0]?.repliedAt == null &&
+      discountLine.some((line) => line.content.includes("скидку")) &&
+      discountReply.every((row) => row.payload.digestId !== discountRow[0]?.id),
+  );
+
+  const liveCard = await db
+    .select()
+    .from(listings)
+    .where(and(eq(listings.userId, deskUser.id), eq(listings.status, "live")));
+  const promoBefore = (await deskJobs()).filter((row) => row.type === "promo").length;
+  await curatorTurn(deskUser.id, "Продвигай это объявление на 300 рублей");
+  const promoYes = await curatorTurn(deskUser.id, "да");
+  check(
+    "promo without deposit creates no task",
+    liveCard.length > 0 &&
+      (await deskJobs()).filter((row) => row.type === "promo").length === promoBefore &&
+      promoYes.action?.href === "/app/billing",
+  );
+
+  const heldCopy = await addDeskTask({ userId: deskUser.id, role: "copy", payload: { spend: false } });
+  const heldDesign = await addDeskTask({ userId: deskUser.id, role: "design", payload: {} });
+  const heldReply = await enqueueJob({
+    userId: deskUser.id,
+    type: "reply",
+    payload: { thread_ref: "pause-thread", tone: "short" },
+    createdBy: deskUser.id,
+  });
+  await curatorTurn(deskUser.id, "Пауза");
+  const stillCopy = await db.select().from(deskTasks).where(eq(deskTasks.id, heldCopy.id));
+  const stillReply = await db.select().from(jobs).where(eq(jobs.id, heldReply.id));
+  check(
+    "pause without yes stops nobody",
+    stillCopy[0]?.status === "queued" && stillReply[0]?.status === "queued",
+  );
+  await curatorTurn(deskUser.id, "да");
+  const stoppedCopy = await db.select().from(deskTasks).where(eq(deskTasks.id, heldCopy.id));
+  const stoppedDesign = await db.select().from(deskTasks).where(eq(deskTasks.id, heldDesign.id));
+  const stoppedReply = await db.select().from(jobs).where(eq(jobs.id, heldReply.id));
+  check(
+    "pause with yes stops text, photo and replies",
+    stoppedCopy[0]?.status === "canceled" &&
+      stoppedDesign[0]?.status === "canceled" &&
+      stoppedReply[0]?.status === "canceled",
+  );
+
+  const guestBefore = (await db.select({ id: jobs.id }).from(jobs)).length;
+  const guest = await curatorTurn(null, "выложи диван за 15 тысяч в Туле", photo("guest.png"));
+  const price = localReply("сколько стоит", null);
+  check(
+    "guest hears the start price and gets no task",
+    guest.handled &&
+      (await db.select({ id: jobs.id }).from(jobs)).length === guestBefore &&
+      price.includes("7") &&
+      price.includes("900") &&
+      price.includes("три объявления в сутки") &&
+      price.toLowerCase().includes("дешевле частного авитолога"),
+  );
+
+  const site = (
+    await Promise.all(
+      ["src/app/page.tsx", "src/app/register/page.tsx", "src/components/curator-chat.tsx", "src/components/curator-widget.tsx", "src/components/onboarding-form.tsx", "src/components/cabinet-overview.tsx"].map(
+        (file) => readFile(file, "utf8"),
+      ),
+    )
+  ).join("\n");
+  check(
+    "public speech has no morning and no bot",
+    clientSpeechOk(site) && clientSpeechOk(curatorFacts()) && clientSpeechOk(price) && clientSpeechOk(listed.reply),
+  );
+  check(
+    "one curator dialog for text and voice",
+    site.includes("Микрофон") && site.includes("sendToCurator") && !site.includes('accept="audio') && !site.includes("defaultChecked"),
+  );
+  check("new cabinet leads with the curator", site.includes("Объявление заводится разговором") && site.includes("Перейти в Авито"));
+
   console.log(failed === 0 ? "ACCEPT PASS" : `ACCEPT FAIL ${failed}`);
 } finally {
   await sqlClient.end({ timeout: 5 });

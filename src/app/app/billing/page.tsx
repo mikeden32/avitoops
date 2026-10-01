@@ -73,7 +73,7 @@ export default async function BillingPage({
         </p>
         <p>
           {data.trial && data.status === "active"
-            ? `Пробный день тарифа Сеть до ${formatDateTime(data.periodEnd)}. Выбранный тариф включится после оплаты.`
+            ? `До ${formatDateTime(data.periodEnd)} бесплатно одно объявление и все функции. Со вторых суток работает выбранный тариф.`
             : `Следующий период до: ${formatDate(data.periodEnd)}`}
         </p>
         <p>Депозит: {formatRub(data.depositRub)}</p>

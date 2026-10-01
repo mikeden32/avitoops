@@ -25,7 +25,35 @@ function MenuGlyph() {
   );
 }
 
-function HeaderLinks({
+function tryOps(onNavigate?: () => void) {
+  onNavigate?.();
+  const input = document.getElementById("ops-command");
+  if (input instanceof HTMLInputElement) {
+    input.scrollIntoView({ block: "center" });
+    input.focus();
+    return;
+  }
+  window.location.href = "/#ops-command";
+}
+
+function ProductLinks({ stacked = false, onNavigate }: { stacked?: boolean; onNavigate?: () => void }) {
+  const linkClass = stacked ? "rounded-xl px-3 py-3 hover:bg-paper" : "hover:text-accent";
+  return (
+    <>
+      <Link href="/#how" className={linkClass} onClick={onNavigate}>
+        Как работает
+      </Link>
+      <Link href="/#capabilities" className={linkClass} onClick={onNavigate}>
+        Возможности
+      </Link>
+      <Link href="/tariffs" className={linkClass} onClick={onNavigate}>
+        Тарифы
+      </Link>
+    </>
+  );
+}
+
+function AccountLinks({
   signedIn,
   cabinetHref,
   signOutAction,
@@ -33,34 +61,30 @@ function HeaderLinks({
   onNavigate,
 }: SiteHeaderProps & { stacked?: boolean; onNavigate?: () => void }) {
   const linkClass = stacked ? "rounded-xl px-3 py-3 hover:bg-paper" : "hover:text-accent";
+  if (signedIn) {
+    return (
+      <>
+        <Link href={cabinetHref} className={linkClass} onClick={onNavigate}>
+          Кабинет
+        </Link>
+        <form action={signOutAction} className={stacked ? "mt-2" : undefined}>
+          <button className={stacked ? `${buttonClass("ghost")} w-full` : buttonClass("ghost")}>Выйти</button>
+        </form>
+      </>
+    );
+  }
   return (
     <>
-      <Link href="/tariffs" className={linkClass} onClick={onNavigate}>
-        Тарифы
+      <Link href="/login" className={linkClass} onClick={onNavigate}>
+        Войти
       </Link>
-      {signedIn ? (
-        <>
-          <Link href={cabinetHref} className={linkClass} onClick={onNavigate}>
-            Кабинет
-          </Link>
-          <form action={signOutAction} className={stacked ? "mt-2" : undefined}>
-            <button className={stacked ? `${buttonClass("ghost")} w-full` : buttonClass("ghost")}>Выйти</button>
-          </form>
-        </>
-      ) : (
-        <>
-          <Link href="/login" className={linkClass} onClick={onNavigate}>
-            Войти
-          </Link>
-          <Link
-            href="/register"
-            className={stacked ? `${buttonClass()} mt-2 w-full` : buttonClass()}
-            onClick={onNavigate}
-          >
-            Подключить
-          </Link>
-        </>
-      )}
+      <button
+        type="button"
+        className={stacked ? `${buttonClass()} mt-2 w-full` : buttonClass()}
+        onClick={() => tryOps(onNavigate)}
+      >
+        Попробовать OPS
+      </button>
     </>
   );
 }
@@ -76,7 +100,7 @@ export function SiteHeader({ signedIn, cabinetHref, signOutAction }: SiteHeaderP
 
   useEffect(() => {
     function onScroll() {
-      setScrolled(window.scrollY > 72);
+      setScrolled(window.scrollY > 12);
     }
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
@@ -106,33 +130,36 @@ export function SiteHeader({ signedIn, cabinetHref, signOutAction }: SiteHeaderP
     return () => media.removeEventListener("change", onChange);
   }, []);
 
-  const links = { signedIn, cabinetHref, signOutAction };
+  const account = { signedIn, cabinetHref, signOutAction };
 
   return (
     <>
-      <header className="z-30 border-b border-line bg-white md:sticky md:top-0">
-        <div className="shell flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between md:gap-4">
+      <header
+        className={`sticky top-0 z-30 transition duration-300 ${
+          scrolled ? "border-b border-line bg-white/85 backdrop-blur" : "border-b border-transparent bg-white/80"
+        }`}
+      >
+        <div className="hero-shell flex items-center justify-between gap-3 py-3">
           <Link href="/" className="shrink-0">
             <Wordmark className="text-2xl md:text-[28px]" />
           </Link>
-          <nav className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold text-ink">
-            <HeaderLinks {...links} />
+          <nav className="hidden items-center gap-6 text-sm font-semibold text-ink md:flex">
+            <ProductLinks />
           </nav>
+          <div className="hidden items-center gap-3 text-sm font-semibold md:flex">
+            <AccountLinks {...account} />
+          </div>
+          <button
+            type="button"
+            className="grid size-11 place-items-center rounded-xl text-ink hover:bg-paper md:hidden"
+            aria-label="Открыть меню"
+            aria-expanded={open}
+            onClick={() => setOpen(true)}
+          >
+            <MenuGlyph />
+          </button>
         </div>
       </header>
-      <button
-        type="button"
-        className={`fixed top-[38%] left-[env(safe-area-inset-left)] z-40 grid h-12 w-10 place-items-center rounded-r-2xl bg-ink text-white shadow-[4px_8px_20px_rgba(20,20,20,0.22)] transition duration-200 ease-out md:hidden ${
-          scrolled && !open ? "translate-x-0" : "pointer-events-none -translate-x-full"
-        }`}
-        aria-label="Открыть меню"
-        aria-expanded={open}
-        aria-hidden={!scrolled || open}
-        tabIndex={scrolled && !open ? 0 : -1}
-        onClick={() => setOpen(true)}
-      >
-        <MenuGlyph />
-      </button>
       {open ? (
         <div className="fixed inset-0 z-[60] md:hidden">
           <button type="button" className="absolute inset-0 bg-ink/30" aria-label="Закрыть меню" onClick={() => setOpen(false)} />
@@ -151,7 +178,8 @@ export function SiteHeader({ signedIn, cabinetHref, signOutAction }: SiteHeaderP
               </button>
             </div>
             <div className="grid text-base font-semibold text-ink">
-              <HeaderLinks {...links} stacked onNavigate={() => setOpen(false)} />
+              <ProductLinks stacked onNavigate={() => setOpen(false)} />
+              <AccountLinks {...account} stacked onNavigate={() => setOpen(false)} />
             </div>
           </nav>
         </div>

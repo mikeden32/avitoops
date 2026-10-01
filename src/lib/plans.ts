@@ -37,6 +37,8 @@ export function directCostRub(plan: Plan) {
   return accessCostRub() + tokenCostRub(plan) + platformCostRub(plan);
 }
 
+export const TRIAL_QUOTA = { publish: 1, update: 20, promo: 20, replies: 200 } as const;
+
 export const DAILY_QUOTA: Record<
   Plan,
   { publish: number; update: number; promo: number; replies: number }
@@ -45,6 +47,13 @@ export const DAILY_QUOTA: Record<
   growth: { publish: 6, update: 6, promo: 6, replies: 60 },
   business: { publish: 10, update: 10, promo: 10, replies: 120 },
   scale: { publish: 20, update: 20, promo: 20, replies: 200 },
+};
+
+export const COPY_MONTHLY: Record<Plan, number> = {
+  start: 4,
+  growth: 8,
+  business: 12,
+  scale: 20,
 };
 
 export const PLAN_PRICES: Record<Plan, number> = {

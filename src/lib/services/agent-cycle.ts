@@ -10,19 +10,9 @@ import {
   sendAvitoMessage,
 } from "../avito";
 import { replySlotOpen } from "./daily";
-import { createDigest } from "./leads";
+import { repliesAllowed, routeBuyerMessage } from "./dispatch";
 import { enqueueNotification } from "./notifications";
 import { completeJob, takeNextJob } from "./jobs";
-
-function wantsHuman(rules: string | null, text: string) {
-  if (!rules?.trim()) return false;
-  const hay = text.toLowerCase();
-  return rules
-    .split(/[,;\n]/)
-    .map((part) => part.trim().toLowerCase())
-    .filter((part) => part.length >= 4)
-    .some((part) => hay.includes(part));
-}
 
 async function replyText(rules: string | null, buyer: string) {
   const system = [
@@ -67,18 +57,10 @@ async function syncAccount(account: {
   let leads = 0;
   let replies = 0;
   for (const message of messages) {
-    const externalRef = `${message.chatId}:${message.messageId}`;
-    const hot = wantsHuman(profile?.escalateRules ?? null, message.text);
-    const row = await createDigest({
-      userId: account.userId,
-      preview: message.text,
-      urgency: hot ? "hot" : "normal",
-      actor: "grok-avitolog",
-      externalRef,
-    });
-    if (row.status !== "new") continue;
-    leads += 1;
+    const routed = await routeBuyerMessage(account.userId, message.text, `${message.chatId}:${message.messageId}`);
+    if (routed === "reply" || routed === "client") leads += 1;
   }
+  if (!(await repliesAllowed(account.userId))) return { leads, replies };
   const pending = await db
     .select()
     .from(messagesDigest)

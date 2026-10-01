@@ -5,6 +5,7 @@ import type { AccessState } from "../db/schema";
 import { AppError } from "../errors";
 import { isAccessState } from "../policy";
 import { audit } from "./audit";
+import { cancelOpenDesk } from "./desk";
 import { cancelOpenJobs, enqueueJob } from "./jobs";
 import { enqueueNotification } from "./notifications";
 
@@ -59,7 +60,11 @@ export async function pauseSubscription(actor: string, userId: string) {
   const [sub] = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).limit(1);
   if (!sub) throw new AppError("Подписка не найдена");
   await db.update(subscriptions).set({ status: "paused" }).where(eq(subscriptions.userId, userId));
-  await cancelOpenJobs(userId, actor);
+  try {
+    await cancelOpenJobs(userId, actor);
+  } finally {
+    await cancelOpenDesk(userId);
+  }
   await audit({
     actor,
     action: "subscription_pause",

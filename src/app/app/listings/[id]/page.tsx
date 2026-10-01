@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { ListingForm } from "@/components/listing-form";
 import { PageTitle } from "@/components/ui";
-import { formatDateTime, jobStatusLabel, listingStatusLabel } from "@/lib/format";
+import { formatDateTime, formatRub, jobStatusLabel, listingStatusLabel } from "@/lib/format";
 import { loadListing } from "@/lib/queries/cabinet";
 import { requireClient } from "@/lib/session";
 import { movePhotoAction, updateListingAction } from "@/server/cabinet-actions";
@@ -28,6 +28,25 @@ export default async function ListingPage({
         </a>
       ) : null}
       {query.ok ? <p className="text-sm text-good">Сохранено</p> : null}
+      <article className="overflow-hidden rounded-[20px] border border-line bg-card">
+        {listing.photos[0] ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            alt=""
+            src={`/api/photos/${user.id}/${listing.id}/${listing.photos[0]}`}
+            className="h-56 w-full object-cover"
+          />
+        ) : (
+          <p className="px-4 pt-4 text-sm text-muted">Фото ещё нет</p>
+        )}
+        <div className="grid gap-1 p-4">
+          <p className="text-xl font-extrabold">{listing.title}</p>
+          <p>
+            {formatRub(listing.priceRub)} · {listing.city}
+          </p>
+          <p className="text-sm text-muted">{listing.body}</p>
+        </div>
+      </article>
       <ul className="grid gap-2">
         {listing.photos.map((photo) => (
           <li key={photo} className="flex items-center justify-between gap-2 rounded-xl border border-line bg-card p-2">
