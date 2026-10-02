@@ -23,3 +23,7 @@ export function noteLiteFailure(config: LiteConfig, now = Date.now()) {
   const openUntil = failures >= config.failureThreshold ? now + config.cooldownMs : 0;
   breakers.set(config.model, { failures: openUntil ? 0 : failures, openUntil });
 }
+
+export function noteLiteBlocked(config: LiteConfig, now = Date.now()) {
+  breakers.set(config.model, { failures: 0, openUntil: now + config.cooldownMs });
+}

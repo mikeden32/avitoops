@@ -1,7 +1,8 @@
 import { logInfo } from "../redact";
 import { applyFacts, composeTask, type TaskState } from "../services/sale";
 import { liteConfig, type LiteConfig } from "./config";
-import { liteCircuitOpen, noteLiteFailure, noteLiteSuccess } from "./circuit";
+import { liteCircuitOpen, noteLiteBlocked, noteLiteFailure, noteLiteSuccess } from "./circuit";
+import { cloudruLiteClient } from "./cloudru-lite";
 import { extractionRequest, LiteCallError, groqLiteClient, type LiteClient } from "./groq-lite";
 import {
   liteReadyLine,
@@ -13,7 +14,7 @@ import {
   type ListingFacts,
 } from "./listing-facts";
 
-export type AiProvider = "rules" | "groq-lite" | "grok-senior";
+export type AiProvider = "rules" | "cloudru-lite" | "groq-lite" | "grok-senior";
 
 export type RouteDecision = {
   apply: boolean;
@@ -47,11 +48,22 @@ function logRoute(entry: Record<string, string | number | boolean | null | undef
   logInfo(`[ai] ${JSON.stringify(entry)}`);
 }
 
+function liteProvider(config: LiteConfig): "cloudru-lite" | "groq-lite" {
+  return config.provider === "groq" ? "groq-lite" : "cloudru-lite";
+}
+
+function liteClient(config: LiteConfig): LiteClient {
+  return config.provider === "groq" ? groqLiteClient(config) : cloudruLiteClient(config);
+}
+
 export async function routeListingExtraction(input: RouteInput): Promise<RouteDecision> {
   const config = input.config ?? liteConfig();
   const rules = input.rules ?? rulesTask(input.text, input.known);
   const senior = rulesNeedSenior(input.text);
   if (!config.enabled) {
+    if (senior) {
+      logRoute({ task: "extract_listing", provider: "grok-senior", model: config.model, success: true, fallback: true, escalation: "strategy" });
+    }
     return { apply: false, provider: senior ? "grok-senior" : "rules", fallbackUsed: false, escalation: senior ? "strategy" : undefined };
   }
   if (senior) {
@@ -70,7 +82,8 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
     return { apply: false, provider: "rules", fallbackUsed: true, escalation: "circuit" };
   }
   const started = Date.now();
-  const client = input.client ?? groqLiteClient(config);
+  const client = input.client ?? liteClient(config);
+  const provider = liteProvider(config);
   try {
     const request = extractionRequest(input.text, input.known);
     const completion = await client({ ...request, timeoutMs: config.timeoutMs });
@@ -86,7 +99,7 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
       noteLiteFailure(config);
       logRoute({
         task: "extract_listing",
-        provider: "groq-lite",
+        provider,
         model: config.model,
         latencyMs,
         success: false,
@@ -108,7 +121,7 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
     const escalate = senior || facts.needsSenior || merged.conflict || facts.intent === "other";
     logRoute({
       task: "extract_listing",
-      provider: "groq-lite",
+      provider,
       model: config.model,
       latencyMs,
       success: true,
@@ -126,7 +139,7 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
     if (config.shadow || escalate) {
       return {
         apply: false,
-        provider: escalate ? "grok-senior" : "groq-lite",
+        provider: escalate ? "grok-senior" : provider,
         fallbackUsed: escalate,
         escalation: senior ? "strategy" : facts.needsSenior ? "senior" : merged.conflict ? "conflict" : undefined,
         facts,
@@ -138,19 +151,20 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
     const ready = task.completeness === "ready" && facts.intent === "create_listing" && !facts.needsSenior;
     return {
       apply: ready,
-      provider: "groq-lite",
+      provider,
       fallbackUsed: false,
       task,
       reply: ready ? liteReadyLine(merged) : undefined,
       facts,
     };
   } catch (error) {
-    noteLiteFailure(config);
     const kind = error instanceof LiteCallError ? error.kind : "network";
     const status = error instanceof LiteCallError ? error.status : 0;
+    if (kind === "permission" || kind === "auth") noteLiteBlocked(config);
+    else noteLiteFailure(config);
     logRoute({
       task: "extract_listing",
-      provider: "groq-lite",
+      provider,
       model: config.model,
       latencyMs: Date.now() - started,
       success: false,
@@ -158,6 +172,9 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
       status,
       schemaValid: false,
       error: kind,
+      errorType: error instanceof LiteCallError ? error.errorType ?? null : null,
+      errorCode: error instanceof LiteCallError ? error.errorCode ?? null : null,
+      errorMessage: error instanceof LiteCallError ? error.errorMessage ?? null : null,
     });
     return { apply: false, provider: senior ? "grok-senior" : "rules", fallbackUsed: true, escalation: kind };
   }

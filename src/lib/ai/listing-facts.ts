@@ -78,7 +78,7 @@ function fold(text: string) {
 }
 
 export function rulesNeedSenior(text: string) {
-  return /стратег|конкурент|как лучше|посоветуй|что выгодн|возражен/.test(fold(text));
+  return /стратег|конкурент|как лучше|посоветуй|что выгодн|возражен|лучше поставить|какую цену|быстрее продать|как быстрее/.test(fold(text));
 }
 
 export function locationLine(locations: string[]) {
