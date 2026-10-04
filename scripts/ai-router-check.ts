@@ -1,8 +1,9 @@
 import { resetLiteCircuit } from "../src/lib/ai/circuit";
+import { seniorModelId } from "../src/lib/grok";
 import { liteConfig } from "../src/lib/ai/config";
 import { cloudruLiteClient } from "../src/lib/ai/cloudru-lite";
 import { LiteCallError } from "../src/lib/ai/groq-lite";
-import { LISTING_FACTS_JSON_SCHEMA, mergeListingFacts, rulesNeedSenior, type ListingFacts } from "../src/lib/ai/listing-facts";
+import { LISTING_FACTS_JSON_SCHEMA, listingFactIssues, mergeListingFacts, rulesNeedSenior, type ListingFacts } from "../src/lib/ai/listing-facts";
 import { routeListingExtraction, type AiProvider } from "../src/lib/ai/router";
 import type { LiteConfig } from "../src/lib/ai/config";
 import type { LiteClient } from "../src/lib/ai/groq-lite";
@@ -31,9 +32,11 @@ function facts(patch: Partial<ListingFacts> = {}): ListingFacts {
     intent: "create_listing",
     product: null,
     price: null,
+    priceQualifier: null,
     currency: "RUB",
     locations: [],
-    attributes: { dimensions: null, delivery: null },
+    dimensions: null,
+    delivery: null,
     missingFields: [],
     confidence: 0.8,
     needsSenior: false,
@@ -65,17 +68,25 @@ async function main() {
   };
 
   try {
-    check("schema is closed", LISTING_FACTS_JSON_SCHEMA.additionalProperties === false && LISTING_FACTS_JSON_SCHEMA.required.includes("needsSenior"));
+    check(
+      "schema is a flat extractor",
+      LISTING_FACTS_JSON_SCHEMA.additionalProperties === false &&
+        LISTING_FACTS_JSON_SCHEMA.required.includes("priceQualifier") &&
+        LISTING_FACTS_JSON_SCHEMA.required.includes("dimensions") &&
+        !("attributes" in LISTING_FACTS_JSON_SCHEMA.properties),
+    );
 
     const bathText = "Продаю каркасную баню 6×2,4 за 570 000 ₽. Москва и область";
     const rulesCard = composeTask(applyFacts(emptyFacts(), bathText));
     check("rules still read the bath", rulesCard.product === "каркасная баня 6×2,4" && rulesCard.price === 570000 && rulesCard.location === "Москва и Московская область");
 
     const bath = facts({
-      product: "каркасная баня 6×2,4",
+      product: "каркасная баня",
       price: 570000,
+      priceQualifier: "exact",
       locations: ["Москва", "Московская область"],
-      attributes: { dimensions: "6×2,4", delivery: true },
+      dimensions: "6x2.4",
+      delivery: true,
     });
     const bathCalls = { n: 0, user: "" };
     const shadow = await routeListingExtraction({
@@ -87,6 +98,69 @@ async function main() {
     const rulesAfter = composeTask(applyFacts(emptyFacts(), bathText));
     check("shadow does not change the card", shadow.apply === false && JSON.stringify(rulesCard) === JSON.stringify(rulesAfter));
     check("shadow still observed", bathCalls.n === 1 && shadow.provider === "cloudru-lite" && shadow.apply === false);
+    const shadowLog = logs.filter((line) => line.startsWith("[ai]")).at(-1) ?? "";
+    check(
+      "create metrics use one contract",
+      shadowLog.includes('"intentMatch":true') &&
+        shadowLog.includes('"productMatch":true') &&
+        shadowLog.includes('"priceMatch":true') &&
+        shadowLog.includes('"locationMatch":true') &&
+        shadowLog.includes('"dimensionsMatch":true'),
+    );
+
+    const podolskShadow = await routeListingExtraction({
+      text: "Продаю баню за 500000 в Подольске",
+      config: base,
+      client: clientOf(facts({ product: "баня", price: 500000, priceQualifier: "exact", locations: ["Подольске"] }), { n: 0, user: "" }),
+    });
+    const podolskLog = logs.filter((line) => line.startsWith("[ai]")).at(-1) ?? "";
+    check(
+      "inflected city still matches",
+      podolskShadow.apply === false && podolskLog.includes('"locationMatch":true') && podolskLog.includes('"productMatch":true'),
+    );
+
+    await routeListingExtraction({
+      text: "Каркасный дом от 1,8 млн, Москва и область",
+      config: base,
+      client: clientOf(
+        facts({
+          product: "каркасный дом",
+          price: 1800000,
+          priceQualifier: "from",
+          locations: ["Москва", "Московская область"],
+        }),
+        { n: 0, user: "" },
+      ),
+    });
+    const fromLog = logs.filter((line) => line.startsWith("[ai]")).at(-1) ?? "";
+    check("from price is not an exact price", fromLog.includes('"priceMatch":true') && fromLog.includes('"priceQualifier"') === false);
+
+    await routeListingExtraction({
+      text: "Каркасный дом от 1,8 млн, Москва и область",
+      config: base,
+      client: clientOf(
+        facts({
+          product: "каркасный дом",
+          price: 1800000,
+          priceQualifier: "exact",
+          locations: ["Москва", "Московская область"],
+        }),
+        { n: 0, user: "" },
+      ),
+    });
+    const exactLog = logs.filter((line) => line.startsWith("[ai]")).at(-1) ?? "";
+    check("exact qualifier does not match from", exactLog.includes('"priceMatch":false'));
+
+    await routeListingExtraction({
+      text: "Поменяй цену на 620000",
+      config: base,
+      client: clientOf(facts({ intent: "edit_listing", price: 620000, priceQualifier: "exact", currency: "RUB" }), { n: 0, user: "" }),
+    });
+    const editLog = logs.filter((line) => line.startsWith("[ai]")).at(-1) ?? "";
+    check(
+      "edit price ignores empty product",
+      editLog.includes('"intentMatch":true') && editLog.includes('"changedFieldMatch":true') && !editLog.includes("productMatch"),
+    );
 
     const liveCalls = { n: 0, user: "" };
     const live = await routeListingExtraction({
@@ -97,10 +171,10 @@ async function main() {
     check(
       "live bath card",
       live.apply === true &&
-        live.task?.product === "каркасная баня 6×2,4" &&
+        live.task?.product === "каркасная баня" &&
         live.task.price === 570000 &&
         live.task.location === "Москва и Московская область" &&
-        live.task.attributes.size === "6×2,4" &&
+        live.task.attributes.size === "6x2.4" &&
         live.task.attributes.delivery === "да" &&
         (live.reply ?? "").includes("570 000") &&
         !(live.reply ?? "").includes("Groq"),
@@ -193,7 +267,10 @@ async function main() {
     );
     check(
       "missing key still logs senior",
-      missingLog.includes('"provider":"grok-senior"') && missingLog.includes('"escalation":"strategy"'),
+      missingLog.includes('"provider":"grok-senior"') &&
+        missingLog.includes('"escalation":"strategy"') &&
+        missingLog.includes(`"model":"${seniorModelId()}"`) &&
+        !missingLog.includes(base.model),
     );
 
     resetLiteCircuit();
@@ -277,7 +354,108 @@ async function main() {
       config: { ...base, shadow: false },
       client: async () => ({ raw: "{", status: 200 }),
     });
+    const brokenLog = logs.at(-1) ?? "";
     check("bad schema falls back", broken.apply === false && broken.escalation === "schema");
+    check(
+      "schema failure logs issue codes without the model body",
+      brokenLog.includes('"validationIssueCodes":["invalid_json"]') && !brokenLog.includes('"{'),
+    );
+    const leaked = listingFactIssues({ intent: "create_listing", note: "ivan@example.com", price: "500000" });
+    check(
+      "issue report keeps paths and drops values",
+      leaked.unexpectedFields.includes("note") &&
+        leaked.validationIssuePaths.includes("price") &&
+        !JSON.stringify(leaked).includes("ivan@example.com") &&
+        !JSON.stringify(leaked).includes("500000"),
+    );
+
+    resetLiteCircuit();
+    const sized = await routeListingExtraction({
+      text: "Каркасная баня 6 на 2.4, 570 тысяч, Москва и МО",
+      config: base,
+      client: clientOf(
+        {
+          ...facts({
+            product: "каркасная баня",
+            price: 570,
+            priceQualifier: "exact",
+            locations: ["Москва", "Московская область"],
+            dimensions: "6 на 2.4",
+          }),
+          sizeNote: "6x2.4",
+        },
+        { n: 0, user: "" },
+      ),
+    });
+    const sizedLog = logs.at(-1) ?? "";
+    check(
+      "frame bath stays schema-valid",
+      sized.facts?.price === 570000 &&
+        sized.facts.dimensions === "6x2.4" &&
+        sized.facts.product === "каркасная баня" &&
+        sizedLog.includes('"schemaValid":true') &&
+        sizedLog.includes('"unexpectedFields":["sizeNote"]'),
+    );
+
+    const powered = await routeListingExtraction({
+      text: "Сдаю рефконтейнер 40 футов в Чехове за 59000 плюс электричество",
+      config: base,
+      client: clientOf(
+        {
+          ...facts({
+            product: "рефконтейнер 40 футов",
+            price: 59000,
+            priceQualifier: "exact",
+            locations: ["Чехов"],
+          }),
+          electricity: "плюс",
+        },
+        { n: 0, user: "" },
+      ),
+    });
+    const poweredLog = logs.at(-1) ?? "";
+    check(
+      "electricity does not break extraction",
+      powered.facts?.price === 59000 &&
+        powered.facts.product === "рефконтейнер 40 футов" &&
+        powered.facts.needsSenior === false &&
+        poweredLog.includes('"schemaValid":true') &&
+        poweredLog.includes('"unexpectedFields":["electricity"]') &&
+        !poweredLog.includes("плюс"),
+    );
+
+    const cabin = await routeListingExtraction({
+      text: "Продам бытовку 6х2,4 за 340к в Домодедово",
+      config: base,
+      client: clientOf(facts({ product: "бытовка", price: "340к" as unknown as number, priceQualifier: null, dimensions: "6х2,4", locations: ["Домодедово"] }), {
+        n: 0,
+        user: "",
+      }),
+    });
+    check(
+      "340k is 340000",
+      cabin.facts?.price === 340000 && cabin.facts.priceQualifier === "exact" && cabin.facts.dimensions === "6x2.4" && cabin.facts.missingFields.includes("price") === false,
+    );
+
+    const table = await routeListingExtraction({
+      text: "Продаю стол, цена пока неизвестна, Тула",
+      config: base,
+      client: clientOf(
+        {
+          ...facts({ product: "стол", price: null, priceQualifier: null, currency: null, locations: ["Тула"], missingFields: [] }),
+          comment: "цены нет",
+        },
+        { n: 0, user: "" },
+      ),
+    });
+    check(
+      "unknown price is a valid card",
+      table.facts?.price === null &&
+        table.facts.priceQualifier === null &&
+        JSON.stringify(table.facts.missingFields) === '["price"]' &&
+        table.facts.locations[0] === "Тула" &&
+        table.facts.product === "стол",
+    );
 
     resetLiteCircuit();
     const disabledCalls = { n: 0 };

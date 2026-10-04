@@ -1,7 +1,12 @@
+export function seniorModelId(env: NodeJS.ProcessEnv = process.env) {
+  const id = env.XAI_MODEL?.trim();
+  return id || "grok-4.6";
+}
+
 export async function askGrok(system: string, user: string) {
   const key = process.env.XAI_API_KEY;
   if (!key) return null;
-  const model = process.env.XAI_MODEL || "grok-4.6";
+  const model = seniorModelId();
   const response = await fetch("https://api.x.ai/v1/chat/completions", {
     method: "POST",
     headers: {
