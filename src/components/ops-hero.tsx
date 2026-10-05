@@ -276,6 +276,7 @@ export function OpsHero() {
           </div>
           <article className="w-full rounded-3xl border border-line bg-card p-4 shadow-[var(--shadow-md)]" aria-live="polite">
             <p className="text-xs font-bold tracking-[0.14em] text-brand uppercase">AI-авитолог AvitoOps</p>
+            {showFields && reply && !showSkeleton ? <p className="mt-3 text-base leading-snug">{reply}</p> : null}
             {showSkeleton ? (
               <div className="mt-3 grid gap-3">
                 <div className="h-28 animate-pulse rounded-2xl bg-paper" />
