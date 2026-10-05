@@ -118,6 +118,7 @@ const base: LiteConfig = {
   failureThreshold: 5,
   cooldownMs: 60_000,
   retryAfterMs: 1000,
+  maxOutputTokens: 800,
 };
 
 async function main() {
@@ -210,6 +211,8 @@ async function main() {
     canonicalDimensions("6x2.4") === "6x2.4",
     canonicalDimensions("6х2,4") === "6x2.4",
     canonicalDimensions("6 на 2.4") === "6x2.4",
+    canonicalLocation("в Клину") === "Клин",
+    canonicalLocation("клиника") === null,
   ];
   if (fragments.some((item) => !item)) failures.push("fragment normalizer mismatch");
 
@@ -226,6 +229,17 @@ async function main() {
   if (extractionQuality("Каркасная баня 6 на 2.4, 570 тысяч, Москва и МО", sizedFacts).productMatch !== true) {
     failures.push("size inside product did not match the split contract");
   }
+  const reeferText = "Сдаю рефконтейнер 40 футов в Чехове за 59000 плюс электричество";
+  const reeferFacts = modelFacts(cases.find((item) => item.text === reeferText)!);
+  reeferFacts.product = "рефконтейнер";
+  reeferFacts.dimensions = "40 футов";
+  if (extractionQuality(reeferText, reeferFacts).productMatch !== true) failures.push("feet size was counted as a different product");
+  const houseText = "Каркасный дом 1,8 млн в Москве";
+  const houseFacts = modelFacts(cases.find((item) => item.text === houseText)!);
+  houseFacts.product = "баня";
+  if (extractionQuality(houseText, houseFacts).productMatch !== false) failures.push("bath matched a frame house");
+  const rented = canonicalListing("Сдам бытовку 6х2.4 в Домодедово, цена не указана");
+  if (rented.product !== "бытовка" || rented.dimensions !== "6x2.4") failures.push("offer verb stayed inside the product");
   if (sized.locationMatch !== true) failures.push("split moscow locations did not match");
 
   const unknownPrice = parseListingFacts({

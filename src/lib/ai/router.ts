@@ -24,6 +24,17 @@ import {
 
 export type AiProvider = "rules" | "cloudru-lite" | "groq-lite" | "grok-senior";
 
+export type LiteRejectionReason = "missing_product" | "schema" | "truncated" | "needs_senior" | "wrong_intent" | "timeout" | "provider_error";
+
+export function acceptLiteExtraction(facts: ListingFacts | null, finishReason: string | null | undefined): { accepted: boolean; rejectionReason: LiteRejectionReason | null } {
+  if (finishReason === "length") return { accepted: false, rejectionReason: "truncated" };
+  if (!facts) return { accepted: false, rejectionReason: "schema" };
+  if (facts.needsSenior) return { accepted: false, rejectionReason: "needs_senior" };
+  if (facts.intent !== "create_listing") return { accepted: false, rejectionReason: "wrong_intent" };
+  if (!facts.product?.trim()) return { accepted: false, rejectionReason: "missing_product" };
+  return { accepted: true, rejectionReason: null };
+}
+
 export type RouteDecision = {
   apply: boolean;
   provider: AiProvider;
@@ -106,33 +117,38 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
     const accepted = coerceListingFacts(parsed);
     const facts = accepted.facts ? alignListingFacts(input.text, accepted.facts) : null;
     const latencyMs = Date.now() - started;
-    if (!facts) {
-      noteLiteFailure(config);
-      const finishReason = completion.finishReason ?? null;
-      const schemaFailureReason = finishReason === "length" ? "truncated" : parsed == null ? "invalid_json" : "schema";
+    const finishReason = completion.finishReason ?? null;
+    const gate = acceptLiteExtraction(facts, finishReason);
+    if (!gate.accepted || !facts) {
+      if (!facts) noteLiteFailure(config);
+      else noteLiteSuccess(config);
+      const schemaFailureReason = facts ? null : finishReason === "length" ? "truncated" : parsed == null ? "invalid_json" : "schema";
       if (finishReason === "length") saveTruncatedLiteResponse(completion.raw);
       logRoute({
         task: "extract_listing",
         provider,
         model: config.model,
         latencyMs,
-        success: false,
+        success: Boolean(facts),
         fallback: true,
+        shadow: config.shadow,
         status: completion.status,
-        schemaValid: false,
-        escalation: "schema",
+        schemaValid: Boolean(facts),
+        accepted: false,
+        rejectionReason: gate.rejectionReason ?? "schema",
+        escalation: "senior",
         inputTokens: completion.inputTokens ?? null,
         outputTokens: completion.outputTokens ?? null,
         finishReason,
-        schemaFailureReason,
+        ...(schemaFailureReason ? { schemaFailureReason } : {}),
         ...listingFactIssues(parsed),
         ...(accepted.unexpectedFields.length ? { unexpectedFields: accepted.unexpectedFields } : {}),
       });
-      return { apply: false, provider: "rules", fallbackUsed: true, escalation: "schema" };
+      return { apply: false, provider: "grok-senior", fallbackUsed: true, escalation: "senior", facts };
     }
     noteLiteSuccess(config);
     const merged = mergeListingFacts({ ...input.known, confirmed: input.known?.confirmed !== false }, facts, input.text);
-    const escalate = senior || facts.needsSenior || merged.conflict || facts.intent === "other";
+    const escalate = merged.conflict;
     logRoute({
       task: "extract_listing",
       provider,
@@ -143,10 +159,12 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
       shadow: config.shadow,
       status: completion.status,
       schemaValid: true,
-      escalation: senior ? "strategy" : facts.needsSenior ? "senior" : merged.conflict ? "conflict" : null,
+      accepted: true,
+      rejectionReason: null,
+      escalation: escalate ? "conflict" : null,
       inputTokens: completion.inputTokens ?? null,
       outputTokens: completion.outputTokens ?? null,
-      finishReason: completion.finishReason ?? null,
+      finishReason,
       ...extractionQuality(input.text, facts),
       ...(accepted.unexpectedFields.length ? { unexpectedFields: accepted.unexpectedFields } : {}),
     });
@@ -155,7 +173,7 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
         apply: false,
         provider: escalate ? "grok-senior" : provider,
         fallbackUsed: escalate,
-        escalation: senior ? "strategy" : facts.needsSenior ? "senior" : merged.conflict ? "conflict" : undefined,
+        escalation: escalate ? "conflict" : undefined,
         facts,
       };
     }
@@ -186,6 +204,8 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
       fallback: true,
       status,
       schemaValid: false,
+      accepted: false,
+      rejectionReason: kind === "timeout" ? "timeout" : "provider_error",
       error: kind,
       errorType: error instanceof LiteCallError ? error.errorType ?? null : null,
       errorCode: error instanceof LiteCallError ? error.errorCode ?? null : null,

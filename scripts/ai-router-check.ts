@@ -23,6 +23,7 @@ const base: LiteConfig = {
   failureThreshold: 5,
   cooldownMs: 60_000,
   retryAfterMs: 1000,
+  maxOutputTokens: 800,
 };
 
 function check(name: string, ok: boolean) {
@@ -112,7 +113,65 @@ async function main() {
         shadowLog.includes('"productMatch":true') &&
         shadowLog.includes('"priceMatch":true') &&
         shadowLog.includes('"locationMatch":true') &&
-        shadowLog.includes('"dimensionsMatch":true'),
+        shadowLog.includes('"dimensionsMatch":true') &&
+        shadowLog.includes('"accepted":true') &&
+        shadowLog.includes('"rejectionReason":null'),
+    );
+
+    const omittedCalls = { n: 0, user: "" };
+    const omitted = await routeListingExtraction({
+      text: "Продаю баню за 500к в Серпухове",
+      config: base,
+      client: clientOf(facts({ product: null, price: 500000, priceQualifier: "exact", locations: ["Серпухов"] }), omittedCalls),
+    });
+    const omittedLog = logs.filter((line) => line.startsWith("[ai]")).at(-1) ?? "";
+    check(
+      "null product is not accepted",
+      omittedCalls.n === 1 &&
+        omitted.apply === false &&
+        omitted.provider === "grok-senior" &&
+        omitted.escalation === "senior" &&
+        omittedLog.includes('"accepted":false') &&
+        omittedLog.includes('"rejectionReason":"missing_product"') &&
+        omittedLog.includes('"fallback":true') &&
+        omittedLog.includes('"schemaValid":true') &&
+        !omittedLog.includes("баня") &&
+        !omittedLog.includes("Серпухов") &&
+        !omittedLog.includes("500000"),
+    );
+    const blankProduct = await routeListingExtraction({
+      text: "Продаю стол за 15000 в Туле",
+      config: { ...base, shadow: false },
+      client: clientOf(facts({ product: "   ", price: 15000, locations: ["Тула"] }), { n: 0, user: "" }),
+    });
+    check("blank product is not applied", blankProduct.apply === false && blankProduct.provider === "grok-senior" && blankProduct.escalation === "senior");
+    const unnamed = await routeListingExtraction({
+      text: "Продаю стол, цена пока неизвестна, Тула",
+      config: base,
+      client: clientOf(facts({ product: "стол", price: 1, priceQualifier: "exact", currency: "RUB", locations: [], missingFields: [] }), { n: 0, user: "" }),
+    });
+    check(
+      "named product stays accepted when the price is unknown",
+      unnamed.apply === false && unnamed.provider === "cloudru-lite" && unnamed.facts?.product === "стол" && unnamed.facts.price == null && unnamed.facts.locations[0] === "Тула",
+    );
+    const klinCalls = { n: 0, user: "" };
+    const klin = await routeListingExtraction({
+      text: "Продаю хозблок 3х2 за 180 тысяч в Клину",
+      config: base,
+      client: clientOf(facts({ product: "хозблок", price: 1, priceQualifier: "exact", locations: ["Тула"], dimensions: "3x2" }), klinCalls),
+    });
+    const klinLog = logs.filter((line) => line.startsWith("[ai]")).at(-1) ?? "";
+    check(
+      "parsed klin overrides the model city",
+      klinCalls.n === 1 &&
+        klin.apply === false &&
+        klin.provider === "cloudru-lite" &&
+        klin.facts?.locations[0] === "Клин" &&
+        klin.facts.price === 180000 &&
+        klinLog.includes('"accepted":true') &&
+        klinLog.includes('"locationMatch":true') &&
+        !klinLog.includes("Тула") &&
+        !klinLog.includes("хозблок"),
     );
 
     const podolskShadow = await routeListingExtraction({
@@ -387,7 +446,7 @@ async function main() {
       client: async () => ({ raw: "{", status: 200 }),
     });
     const brokenLog = logs.at(-1) ?? "";
-    check("bad schema falls back", broken.apply === false && broken.escalation === "schema");
+    check("bad schema falls back", broken.apply === false && broken.provider === "grok-senior" && broken.escalation === "senior" && brokenLog.includes('"accepted":false') && brokenLog.includes('"rejectionReason":"schema"'));
     check(
       "schema failure logs issue codes without the model body",
       brokenLog.includes('"validationIssueCodes":["invalid_json"]') && brokenLog.includes('"schemaFailureReason":"invalid_json"') && !brokenLog.includes('"{'),
@@ -403,7 +462,10 @@ async function main() {
     check(
       "truncated json is telemetry without a journal body",
       truncated.apply === false &&
-        truncated.escalation === "schema" &&
+        truncated.provider === "grok-senior" &&
+        truncated.escalation === "senior" &&
+        truncatedLog.includes('"accepted":false') &&
+        truncatedLog.includes('"rejectionReason":"truncated"') &&
         truncatedLog.includes('"finishReason":"length"') &&
         truncatedLog.includes('"outputTokens":800') &&
         truncatedLog.includes('"schemaFailureReason":"truncated"') &&
@@ -658,10 +720,18 @@ async function main() {
       configured.enabled &&
         configured.shadow &&
         configured.provider === "cloudru" &&
-        configured.model === "ai-sage/GigaChat3-10B-A1.8B" &&
+        configured.model === "ai-sage/GigaChat3.5-432B-A28B" &&
         configured.baseUrl === "https://foundation-models.api.cloud.ru/v1" &&
-        configured.timeoutMs === 3500,
+        configured.timeoutMs === 3500 &&
+        configured.maxOutputTokens === 800,
     );
+    const savedMaxTokens = process.env.AI_LITE_MAX_OUTPUT_TOKENS;
+    process.env.AI_LITE_MAX_OUTPUT_TOKENS = "1600";
+    check("max output tokens come from env", liteConfig().maxOutputTokens === 1600);
+    process.env.AI_LITE_MAX_OUTPUT_TOKENS = "8000";
+    check("oversized max output tokens stay at the fallback", liteConfig().maxOutputTokens === 800);
+    if (savedMaxTokens === undefined) delete process.env.AI_LITE_MAX_OUTPUT_TOKENS;
+    else process.env.AI_LITE_MAX_OUTPUT_TOKENS = savedMaxTokens;
     process.env.AI_LITE_PROVIDER = "groq";
     process.env.GROQ_API_KEY = "test-key";
     process.env.GROQ_LITE_MODEL = "openai/gpt-oss-20b";

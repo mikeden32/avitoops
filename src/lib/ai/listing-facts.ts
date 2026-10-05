@@ -57,7 +57,7 @@ export const EXTRACTION_SYSTEM_PROMPT = [
   "Верни только JSON по схеме. Без объяснений, рассуждений и текста вокруг.",
   "Извлеки поля объявления. Не выдумывай значения.",
   "intent: create_listing, edit_listing или other.",
-  "product — название без размера, иначе null. Пустую строку не возвращай. «6 на 2.4», «6х2,4» и «6x2.4» пиши только в dimensions как 6x2.4.",
+  "product — тип объекта без цены, города и размера. Если объект назван, не ставь null. Пустую строку не возвращай. «каркасная баня 6 на 2.4» → product «каркасная баня», dimensions «6x2.4». «рефконтейнер 40 футов» → product «рефконтейнер», dimensions «40 футов».",
   "price — целое число рублей или null. Если суммы нет, ставь null, не 0 и не поясняй расчёт.",
   "priceQualifier: exact, from, to, approximate или null. «от» → from, «до» → to, «примерно» или «около» → approximate.",
   "currency: RUB, если цена есть, иначе null.",
@@ -124,6 +124,7 @@ const PLACE_STEMS: { test: RegExp; name: string }[] = [
   { test: /калуг/, name: "Калуга" },
   { test: /ярославл/, name: "Ярославль" },
   { test: /сочи/, name: "Сочи" },
+  { test: /(?<![а-я])клин(?:ом|ский|ская|а|у|е)?(?![а-я])/, name: "Клин" },
 ];
 
 const DIMENSION_SOURCE = String.raw`(\d+(?:[.,]\d+)?)\s*(?:на|[xх×*])\s*(\d+(?:[.,]\d+)?)(?:\s*(?:на|[xх×*])\s*(\d+(?:[.,]\d+)?))?`;
@@ -244,11 +245,15 @@ function inflectWord(word: string) {
   return lower;
 }
 
+const LINEAR_SIZE = /\d+(?:[.,]\d+)?\s*(?:футов|фута|фут|метров|метра|метр|см|мм)(?![а-я])/gi;
+const OFFER_PREFIX = /^(?:прода(?:ю|ем|ть|вать|м)|сда(?:ю|ем|м)|устанавлива(?:ю|ем)|предлага(?:ю|ем))\s+/;
+
 export function canonicalProductName(value: string | null | undefined): string | null {
   if (!value) return null;
   const withoutSize = value.replace(new RegExp(DIMENSION_SOURCE, "ig"), " ");
   const words = withoutSize
-    .replace(/[.,;!?]+/g, " ")
+    .replace(/[.,;!?'"«»`()[\]/\\|]+/g, " ")
+    .replace(/[-–—]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .split(" ")
@@ -256,6 +261,13 @@ export function canonicalProductName(value: string | null | undefined): string |
     .map(inflectWord);
   const name = words.join(" ").trim();
   return name.length >= 3 ? name : null;
+}
+
+export function comparableProduct(value: string | null | undefined): string | null {
+  const named = canonicalProductName(value);
+  if (!named) return null;
+  const key = named.replace(OFFER_PREFIX, "").replace(LINEAR_SIZE, " ").replace(/\s+/g, " ").trim();
+  return key.length >= 3 ? key : null;
 }
 
 function canonicalDelivery(text: string): boolean | null {
@@ -344,7 +356,7 @@ function listingIntent(text: string): ListingIntent {
 
 function productFromText(text: string): { product: string | null; dimensions: string | null } {
   const dimensions = canonicalDimensions(text);
-  let rest = text.replace(/^(?:прода(?:ю|ем|ём|ть|вать|м)|сда(?:ю|ем|ём)|устанавлива(?:ю|ем)|предлага(?:ю|ем))\s+/i, "");
+  let rest = text.replace(/^(?:прода(?:ю|ем|ём|ть|вать|м)|сда(?:ю|ем|ём|м)|устанавлива(?:ю|ем)|предлага(?:ю|ем))\s+/i, "");
   rest = rest.replace(new RegExp(DIMENSION_SOURCE, "ig"), " ");
   rest = rest.replace(/(?:примерно|около|порядка|от|до)\s+\d[\d\s.,]*(?:\s*(?:млн|тыс[а-яё]*|к(?![а-яё])))?/gi, " ");
   rest = rest.replace(/\d[\d\s.,]*\s*(?:млн|тыс[а-яё]*|₽|руб[а-яё]*)/gi, " ");
@@ -509,6 +521,14 @@ export function alignListingFacts(text: string, facts: ListingFacts): ListingFac
   }
   const size = canonicalDimensions(text);
   if (size && !next.dimensions) next = { ...next, dimensions: size };
+  const place = canonicalLocation(text);
+  if (place) {
+    next = {
+      ...next,
+      locations: regionLocations(place),
+      missingFields: next.missingFields.filter((field) => field !== "location"),
+    };
+  }
   return next;
 }
 
@@ -525,7 +545,6 @@ export function extractionQuality(text: string, facts: ListingFacts): Extraction
   const expected = canonicalListing(text);
   const intentMatch = facts.intent === expected.intent;
   const location = normalizeLocationList(facts.locations);
-  const product = canonicalProductName(facts.product);
   const dimensions = canonicalDimensions(facts.dimensions) ?? canonicalDimensions(facts.product);
   if (expected.intent === "edit_listing") {
     const priceOk = expected.price == null ? facts.price == null : facts.price === expected.price && facts.priceQualifier === expected.priceQualifier;
@@ -535,7 +554,7 @@ export function extractionQuality(text: string, facts: ListingFacts): Extraction
   if (expected.intent === "other") return { intentMatch };
   return {
     intentMatch,
-    productMatch: product === expected.product,
+    productMatch: comparableProduct(facts.product) === comparableProduct(expected.product),
     priceMatch: facts.price === expected.price && facts.priceQualifier === expected.priceQualifier,
     locationMatch: location === expected.location,
     dimensionsMatch: dimensions === expected.dimensions,

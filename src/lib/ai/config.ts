@@ -11,14 +11,21 @@ export type LiteConfig = {
   failureThreshold: number;
   cooldownMs: number;
   retryAfterMs: number;
+  maxOutputTokens: number;
 };
 
 export const CLOUDRU_LITE_BASE_URL = "https://foundation-models.api.cloud.ru/v1";
-export const CLOUDRU_LITE_MODEL = "ai-sage/GigaChat3-10B-A1.8B";
+export const CLOUDRU_LITE_MODEL = "ai-sage/GigaChat3.5-432B-A28B";
 
 function numberFrom(raw: string | undefined, fallback: number) {
   const value = Number(raw);
   return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+export function liteMaxOutputTokens(env: NodeJS.ProcessEnv = process.env) {
+  const value = Number(env.AI_LITE_MAX_OUTPUT_TOKENS);
+  if (!Number.isInteger(value) || value < 64 || value > 2400) return 800;
+  return value;
 }
 
 export function liteConfig(env: NodeJS.ProcessEnv = process.env): LiteConfig {
@@ -38,5 +45,6 @@ export function liteConfig(env: NodeJS.ProcessEnv = process.env): LiteConfig {
     failureThreshold: numberFrom(env.AI_LITE_FAILURE_THRESHOLD, 5) || 5,
     cooldownMs: numberFrom(env.AI_LITE_COOLDOWN_MS, 60_000) || 60_000,
     retryAfterMs: 1000,
+    maxOutputTokens: liteMaxOutputTokens(env),
   };
 }
