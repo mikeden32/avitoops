@@ -7,6 +7,7 @@ import {
   extractionQuality,
   listingFactIssues,
   parseListingFacts,
+  parseRussianPrice,
   readMoney,
   type ListingFacts,
   type PriceQualifier,
@@ -54,7 +55,13 @@ const cases: GoldenCase[] = [
   row("Продаю баню с доставкой за 500000 в Туле", "create_listing", "баня", 500000, "exact", "Тула", null, true, []),
   row("Продаю баню без доставки за 500000 в Туле", "create_listing", "баня", 500000, "exact", "Тула", null, false, []),
   row("Поменяй цену на 620000", "edit_listing", null, 620000, "exact", null, null, null, []),
+  row("Сделай цену 590 тысяч", "edit_listing", null, 590000, "exact", null, null, null, []),
+  row("Цена теперь 1,2 млн", "edit_listing", null, 1200000, "exact", null, null, null, []),
+  row("Поставь 850000", "edit_listing", null, 850000, "exact", null, null, null, []),
   row("Измени город на Тулу", "edit_listing", null, null, null, "Тула", null, null, []),
+  row("Город теперь Тула", "edit_listing", null, null, null, "Тула", null, null, []),
+  row("Поставь Москву и область", "edit_listing", null, null, null, "Москва и Московская область", null, null, []),
+  row("Работаем теперь Москва и МО", "edit_listing", null, null, null, "Москва и Московская область", null, null, []),
   row("Сколько стоит тариф?", "other", null, null, null, null, null, null, []),
   row("Какая сегодня погода?", "other", null, null, null, null, null, null, []),
   row("Проанализируй конкурентов и предложи стратегию цены", "other", null, null, null, null, null, null, [], true),
@@ -153,16 +160,46 @@ async function main() {
     }
   }
 
+  const price = (text: string, value: number | null, qualifier: PriceQualifier | null, explicit: boolean) => {
+    const parsed = parseRussianPrice(text);
+    return parsed.value === value && parsed.qualifier === qualifier && parsed.explicit === explicit && readMoney(text).price === value;
+  };
+  const prices = [
+    price("500000", 500000, "exact", true),
+    price("500 000", 500000, "exact", true),
+    price("500к", 500000, "exact", true),
+    price("500 к", 500000, "exact", true),
+    price("500 тыс", 500000, "exact", true),
+    price("570 тысяч", 570000, "exact", true),
+    price("340к", 340000, "exact", true),
+    price("59.000", 59000, "exact", true),
+    price("59 000", 59000, "exact", true),
+    price("59к", 59000, "exact", true),
+    price("59 к", 59000, "exact", true),
+    price("59 тыс", 59000, "exact", true),
+    price("59 тысяч", 59000, "exact", true),
+    price("1,8 млн", 1800000, "exact", true),
+    price("1.8 млн", 1800000, "exact", true),
+    price("1800000", 1800000, "exact", true),
+    price("от 1,8 млн", 1800000, "from", true),
+    price("до 2 млн", 2000000, "to", true),
+    price("около 2 млн", 2000000, "approximate", true),
+    price("примерно 2 млн", 2000000, "approximate", true),
+    price("1,2 млн", 1200000, "exact", true),
+    price("цена пока неизвестна", null, null, true),
+    price("цена неизвестна", null, null, true),
+    price("без цены", null, null, true),
+    price("6x2.4", null, null, false),
+    price("6х2,4", null, null, false),
+    price("40 футов", null, null, false),
+    price("20 объявлений", null, null, false),
+    price("3 правки", null, null, false),
+    price("Сдаю рефконтейнер 40 футов в Чехове за 59000", 59000, "exact", true),
+  ];
+  if (prices.some((item) => !item)) failures.push("price parser mismatch");
+  else console.log("price parser passed");
+
   const fragments = [
-    readMoney("500000").price === 500000,
-    readMoney("500 000").price === 500000,
-    readMoney("500к").price === 500000,
-    readMoney("500 тыс").price === 500000,
-    readMoney("1,8 млн").price === 1800000 && readMoney("1,8 млн").priceQualifier === "exact",
-    readMoney("от 1,8 млн").priceQualifier === "from",
-    readMoney("около 2 млн").priceQualifier === "approximate",
-    readMoney("до 2 млн").priceQualifier === "to",
-    readMoney("цена пока неизвестна").price == null,
     canonicalLocation("Москва") === "Москва",
     canonicalLocation("Москва и МО") === "Москва и Московская область",
     canonicalLocation("Подольск") === "Подольск",
@@ -275,6 +312,47 @@ async function main() {
     if (route.provider !== "grok-senior" || route.escalation !== "strategy" || route.apply !== false) failures.push(`senior route ${item.text}`);
   }
   if (strategyCalls.n !== 0) failures.push("strategy called lite");
+
+  const blankProduct = parseListingFacts({
+    intent: "edit_listing",
+    product: "",
+    price: 620000,
+    priceQualifier: "exact",
+    currency: "RUB",
+    locations: [],
+    dimensions: null,
+    delivery: null,
+    missingFields: [],
+    needsSenior: false,
+    confidence: 0.4,
+  });
+  if (!blankProduct || blankProduct.product !== null || blankProduct.price !== 620000) failures.push("empty product string failed the schema");
+
+  const editCalls = { n: 0 };
+  const known = { product: "баня", location: "Подольск", price: 570000, confirmed: true };
+  const edits: { text: string; price?: number; locations?: string[] }[] = [
+    { text: "Поменяй цену на 620000", price: 620000 },
+    { text: "Цена теперь 1,2 млн", price: 1200000 },
+    { text: "Поменяй город на Чехов", locations: ["Чехов"] },
+    { text: "Работаем теперь Москва и МО", locations: ["Москва", "Московская область"] },
+  ];
+  for (const item of edits) {
+    const route = await routeListingExtraction({
+      text: item.text,
+      known,
+      config: base,
+      client: async () => {
+        editCalls.n += 1;
+        return { raw: "{}", status: 200 };
+      },
+    });
+    const priceOk = item.price == null || route.facts?.price === item.price;
+    const locationOk = !item.locations || JSON.stringify(route.facts?.locations) === JSON.stringify(item.locations);
+    if (route.provider !== "rules" || route.facts?.intent !== "edit_listing" || route.apply !== false || !priceOk || !locationOk) {
+      failures.push(`edit route ${item.text}`);
+    }
+  }
+  if (editCalls.n !== 0) failures.push("clear edits called lite");
 
   const total = cases.length;
   console.log(

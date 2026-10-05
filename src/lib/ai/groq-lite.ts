@@ -61,6 +61,7 @@ export type LiteCompletion = {
   status: number;
   inputTokens?: number;
   outputTokens?: number;
+  finishReason?: string;
 };
 
 export type LiteClient = (input: { system: string; user: string; timeoutMs: number }) => Promise<LiteCompletion>;
@@ -155,7 +156,7 @@ export async function completeOpenAIChat(input: {
   if (response.status >= 500) throw new LiteCallError("server", response.status, detail);
   if (!response.ok) throw new LiteCallError("server", response.status, detail);
   const data = (await response.json()) as {
-    choices?: { message?: { content?: string } }[];
+    choices?: { finish_reason?: string; message?: { content?: string } }[];
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   const raw = data.choices?.[0]?.message?.content?.trim();
@@ -165,6 +166,7 @@ export async function completeOpenAIChat(input: {
     status: response.status,
     inputTokens: data.usage?.prompt_tokens,
     outputTokens: data.usage?.completion_tokens,
+    finishReason: data.choices?.[0]?.finish_reason,
   };
 }
 

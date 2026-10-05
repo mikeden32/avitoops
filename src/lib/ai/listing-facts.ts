@@ -54,16 +54,17 @@ export const LISTING_FACTS_JSON_SCHEMA = {
 } as const;
 
 export const EXTRACTION_SYSTEM_PROMPT = [
+  "Верни только JSON по схеме. Без объяснений, рассуждений и текста вокруг.",
   "Извлеки поля объявления. Не выдумывай значения.",
   "intent: create_listing, edit_listing или other.",
-  "product — название без размера, иначе null. «6 на 2.4», «6х2,4» и «6x2.4» пиши только в dimensions как 6x2.4.",
-  "price — целое число рублей или null. Не подставляй 0, если цены нет. «340к» = 340000, «570 тысяч» = 570000, «1,8 млн» = 1800000.",
-  "priceQualifier: exact, from, to, approximate или null. «от 1,8 млн» → 1800000 и from. «до 2 млн» → to. «примерно» или «около» → approximate.",
+  "product — название без размера, иначе null. Пустую строку не возвращай. «6 на 2.4», «6х2,4» и «6x2.4» пиши только в dimensions как 6x2.4.",
+  "price — целое число рублей или null. Если суммы нет, ставь null, не 0 и не поясняй расчёт.",
+  "priceQualifier: exact, from, to, approximate или null. «от» → from, «до» → to, «примерно» или «около» → approximate.",
   "currency: RUB, если цена есть, иначе null.",
   "locations — города в именительном падеже. «в Подольске» → [\"Подольск\"]. «Москва и МО» → [\"Москва\", \"Московская область\"].",
   "delivery: true, false или null.",
   "missingFields — только отсутствующие product, price, location. Для правки цены не требуй product и location.",
-  "Неизвестная цена — price null, priceQualifier null, и price в missingFields. Это валидный ответ, не ошибка.",
+  "Неизвестная цена — price null, priceQualifier null, и price в missingFields.",
   "Оговорки вроде «плюс электричество» не добавляй отдельными полями и не ставь из-за них needsSenior.",
   "needsSenior=true только для совета, стратегии или нескольких разных задач.",
   "confidence — число от 0 до 1.",
@@ -179,29 +180,58 @@ export function canonicalDimensions(value: string | null | undefined): string | 
     .join("x");
 }
 
-export function readMoney(text: string): { price: number | null; priceQualifier: PriceQualifier | null } {
+export type ParsedPrice = {
+  value: number | null;
+  qualifier: PriceQualifier | null;
+  explicit: boolean;
+};
+
+const UNIT_TAIL = /^\s*(?:футов|фута|фут|объявлен|правк|метр|см|мм|шт)/;
+const PRICE_EDIT = "(?:поменяй|поменяйте|поменять|измени|измените|изменить|исправь|исправьте|исправить|смени|смените|сменить|сделай|сделайте|сделать)";
+
+function amount(raw: string, factor: number) {
+  const value = Math.round(Number(raw.replace(/[ \u00a0\u202f]/g, "").replace(",", ".")) * factor);
+  if (!Number.isInteger(value) || value <= 0 || value > 100_000_000) return null;
+  return value;
+}
+
+function firstAmount(source: string, pattern: RegExp, scale: (raw: string) => number | null) {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const re = new RegExp(pattern.source, flags);
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(source))) {
+    if (UNIT_TAIL.test(source.slice(match.index + match[0].length))) continue;
+    const value = scale(match[1]);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+export function parseRussianPrice(text: string): ParsedPrice {
   const q = fold(text);
-  const qualifier: PriceQualifier | null = /примерно|около|порядка/.test(q)
+  const bare = q.replace(new RegExp(DIMENSION_SOURCE, "ig"), " ");
+  const unknown = /неизвест|не\s+указан|нет\s+цены|без\s+цены/.test(q);
+  const value =
+    firstAmount(bare, /(\d+(?:[.,]\d+)?)\s*млн/, (raw) => amount(raw, 1_000_000)) ??
+    firstAmount(bare, /(\d+(?:[.,]\d+)?)\s*тыс/, (raw) => amount(raw, 1_000)) ??
+    firstAmount(bare, /(\d+(?:[.,]\d+)?)\s*к(?![а-я])/, (raw) => amount(raw, 1_000)) ??
+    firstAmount(bare, /(\d{1,3}(?:[ \u00a0\u202f]\d{3})+)/, (raw) => amount(raw, 1)) ??
+    firstAmount(bare, /(\d{1,3}(?:\.\d{3})+)/, (raw) => amount(raw.replace(/\./g, ""), 1)) ??
+    firstAmount(bare, /(\d{4,8})(?!\d)/, (raw) => amount(raw, 1));
+  if (value == null) return { value: null, qualifier: null, explicit: unknown };
+  const qualifier: PriceQualifier = /(?:^|[^а-я])(?:примерно|около|порядка)(?![а-я])/.test(q)
     ? "approximate"
     : /(?:^|[^а-я])от\s+\d/.test(q)
       ? "from"
       : /(?:^|[^а-я])до\s+\d/.test(q)
         ? "to"
-        : null;
-  const scaled = (match: RegExpMatchArray | null, factor: number) => {
-    if (!match) return null;
-    const value = Math.round(Number(match[1].replace(",", ".")) * factor);
-    if (!Number.isInteger(value) || value <= 0 || value > 100_000_000) return null;
-    return value;
-  };
-  const million = scaled(q.match(/(\d+(?:[.,]\d+)?)\s*млн/), 1_000_000);
-  const thousand = scaled(q.match(/(\d+(?:[.,]\d+)?)\s*тыс/), 1_000);
-  const kilo = scaled(q.match(/(\d+)\s*к(?![а-я])/), 1_000);
-  const spaced = q.match(/(\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d{4,8})/);
-  const plain = spaced ? Number(spaced[1].replace(/[ \u00a0\u202f]/g, "")) : null;
-  const price = million ?? thousand ?? kilo ?? (plain != null && plain >= 100 && plain <= 100_000_000 ? plain : null);
-  if (price == null) return { price: null, priceQualifier: null };
-  return { price, priceQualifier: qualifier ?? "exact" };
+        : "exact";
+  return { value, qualifier, explicit: true };
+}
+
+export function readMoney(text: string): { price: number | null; priceQualifier: PriceQualifier | null } {
+  const parsed = parseRussianPrice(text);
+  return { price: parsed.value, priceQualifier: parsed.qualifier };
 }
 
 function inflectWord(word: string) {
@@ -235,10 +265,79 @@ function canonicalDelivery(text: string): boolean | null {
   return null;
 }
 
+function regionLocations(name: string) {
+  if (name === MOSCOW_REGION) return ["Москва", "Московская область"];
+  if (name === PETERSBURG_REGION) return ["Санкт-Петербург", "Ленинградская область"];
+  return [name];
+}
+
+function blankFacts(patch: Partial<ListingFacts>): ListingFacts {
+  return {
+    intent: "edit_listing",
+    product: null,
+    price: null,
+    priceQualifier: null,
+    currency: null,
+    locations: [],
+    dimensions: null,
+    delivery: null,
+    missingFields: [],
+    needsSenior: false,
+    confidence: 1,
+    ...patch,
+  };
+}
+
+export type DeterministicEdit = {
+  changedField: "price" | "location";
+  facts: ListingFacts;
+};
+
+export function deterministicEdit(text: string): DeterministicEdit | null {
+  if (rulesNeedSenior(text)) return null;
+  const q = fold(text);
+  const money = parseRussianPrice(text);
+  const place = canonicalLocation(text);
+  const priceCommand =
+    new RegExp(`${PRICE_EDIT}\\s+цен[ауы]\\s+(?:на\\s+)?`).test(q) ||
+    /цен[аы]\s+теперь/.test(q) ||
+    (/(?:^|[^а-я])(?:поставь|поставьте)\s+\d/.test(q) && money.value != null && place == null);
+  const locationCommand =
+    new RegExp(`${PRICE_EDIT}\\s+город\\s+на\\s+`).test(q) ||
+    /город\s+теперь/.test(q) ||
+    (/работаем\s+теперь/.test(q) && place != null) ||
+    (/(?:^|[^а-я])(?:поставь|поставьте)\s+/.test(q) && place != null && money.value == null);
+  if (priceCommand && locationCommand) return null;
+  if (priceCommand && money.explicit && money.value != null && money.qualifier) {
+    return {
+      changedField: "price",
+      facts: blankFacts({ price: money.value, priceQualifier: money.qualifier, currency: "RUB" }),
+    };
+  }
+  if (locationCommand && place) {
+    return { changedField: "location", facts: blankFacts({ locations: regionLocations(place) }) };
+  }
+  return null;
+}
+
+function namesPriceEdit(text: string) {
+  const q = fold(text);
+  return deterministicEdit(text)?.changedField === "price" || (/цен[ауы]/.test(q) && /поменя|измени|исправ|смени|сделай|теперь|поставь/.test(q));
+}
+
+function namesLocationEdit(text: string) {
+  const q = fold(text);
+  return (
+    deterministicEdit(text)?.changedField === "location" ||
+    (/город/.test(q) && /поменя|измени|исправ|смени|теперь|поставь/.test(q)) ||
+    /работаем\s+теперь/.test(q)
+  );
+}
+
 function listingIntent(text: string): ListingIntent {
   const q = fold(text);
   if (rulesNeedSenior(text)) return "other";
-  if (/поменя|измени|исправ|смени|поставь цен|поставьте цен/.test(q)) return "edit_listing";
+  if (deterministicEdit(text) || /поменя|измени|исправ|смени|поставь цен|поставьте цен|город теперь|цена теперь|работаем теперь/.test(q)) return "edit_listing";
   if (/сколько|тариф|привет|кто ты|кто вы|оферт|погод|добрый|здравствуй|спасибо/.test(q)) return "other";
   return "create_listing";
 }
@@ -335,6 +434,7 @@ export function coerceListingFacts(raw: unknown): { facts: ListingFacts | null; 
     if (LISTING_FACT_KEYS.has(key)) body[key] = value;
     else if (/^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(key)) unexpectedFields.push(key);
   }
+  if (typeof body.product === "string" && !body.product.trim()) body.product = null;
   if (typeof body.price === "string") {
     const trimmed = body.price.trim();
     if (!trimmed || /неизвест|не указан|нет цены/.test(fold(trimmed))) {
@@ -384,28 +484,28 @@ export function parseListingFacts(raw: unknown): ListingFacts | null {
 
 export function alignListingFacts(text: string, facts: ListingFacts): ListingFacts {
   let next = facts;
-  const money = readMoney(text);
-  if (money.price == null) {
-    const unknown = /неизвест/.test(fold(text));
-    if ((next.price === 0 && unknown) || (next.price == null && next.intent === "create_listing" && !next.missingFields.includes("price"))) {
-      next = {
-        ...next,
-        price: null,
-        priceQualifier: null,
-        currency: null,
-        missingFields: next.missingFields.includes("price") ? next.missingFields : [...next.missingFields, "price"],
-      };
-    }
-  } else if (next.price != null && next.price !== money.price && (next.price * 1000 === money.price || next.price * 1_000_000 === money.price)) {
+  const parsed = parseRussianPrice(text);
+  if (parsed.explicit && parsed.value != null) {
     next = {
       ...next,
-      price: money.price,
-      priceQualifier: next.priceQualifier ?? money.priceQualifier,
+      price: parsed.value,
+      priceQualifier: parsed.qualifier,
       currency: "RUB",
       missingFields: next.missingFields.filter((field) => field !== "price"),
     };
-  } else if (next.price === money.price && next.missingFields.includes("price")) {
-    next = { ...next, missingFields: next.missingFields.filter((field) => field !== "price") };
+  } else if (parsed.explicit && parsed.value == null) {
+    next = {
+      ...next,
+      price: null,
+      priceQualifier: null,
+      currency: null,
+      missingFields:
+        next.intent === "create_listing"
+          ? next.missingFields.includes("price")
+            ? next.missingFields
+            : [...next.missingFields, "price"]
+          : next.missingFields.filter((field) => field !== "price"),
+    };
   }
   const size = canonicalDimensions(text);
   if (size && !next.dimensions) next = { ...next, dimensions: size };
@@ -445,15 +545,18 @@ export function extractionQuality(text: string, facts: ListingFacts): Extraction
 export function mergeListingFacts(existing: KnownFacts, extracted: ListingFacts, text = ""): MergedFacts {
   const confirmed = existing.confirmed !== false && Boolean(existing.product || existing.location || existing.price);
   const nextLocation = locationLine(extracted.locations);
-  const nextPrice = extracted.price && extracted.price > 0 ? extracted.price : null;
+  const parsed = parseRussianPrice(text);
+  const nextPrice = parsed.explicit && parsed.value != null ? parsed.value : extracted.price && extracted.price > 0 ? extracted.price : null;
+  const priceExplicit = nextPrice != null && (namesPriceEdit(text) || !confirmed) && (parsed.value === nextPrice || textHasPrice(text, nextPrice));
+  const locationExplicit = nextLocation != null && (namesLocationEdit(text) || !confirmed) && textHasLocation(text, nextLocation);
   let conflict = false;
   const product = pick(existing.product ?? null, blank(extracted.product), confirmed, textHasPhrase(text, blank(extracted.product)), () => {
     conflict = true;
   });
-  const location = pick(existing.location ?? null, nextLocation, confirmed, textHasLocation(text, nextLocation), () => {
+  const location = pick(existing.location ?? null, nextLocation, confirmed, locationExplicit, () => {
     conflict = true;
   });
-  const price = pick(existing.price ?? null, nextPrice, confirmed, nextPrice != null && textHasPrice(text, nextPrice), () => {
+  const price = pick(existing.price ?? null, nextPrice, confirmed, priceExplicit, () => {
     conflict = true;
   });
   return { product, location, price, conflict };

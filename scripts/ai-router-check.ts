@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resetLiteCircuit } from "../src/lib/ai/circuit";
 import { seniorModelId } from "../src/lib/grok";
 import { liteConfig } from "../src/lib/ai/config";
 import { cloudruLiteClient } from "../src/lib/ai/cloudru-lite";
 import { LiteCallError } from "../src/lib/ai/groq-lite";
-import { LISTING_FACTS_JSON_SCHEMA, listingFactIssues, mergeListingFacts, rulesNeedSenior, type ListingFacts } from "../src/lib/ai/listing-facts";
+import { EXTRACTION_SYSTEM_PROMPT, LISTING_FACTS_JSON_SCHEMA, alignListingFacts, extractionQuality, listingFactIssues, mergeListingFacts, rulesNeedSenior, type ListingFacts } from "../src/lib/ai/listing-facts";
 import { routeListingExtraction, type AiProvider } from "../src/lib/ai/router";
 import type { LiteConfig } from "../src/lib/ai/config";
 import type { LiteClient } from "../src/lib/ai/groq-lite";
@@ -74,6 +77,10 @@ async function main() {
         LISTING_FACTS_JSON_SCHEMA.required.includes("priceQualifier") &&
         LISTING_FACTS_JSON_SCHEMA.required.includes("dimensions") &&
         !("attributes" in LISTING_FACTS_JSON_SCHEMA.properties),
+    );
+    check(
+      "extraction prompt is schema json only",
+      EXTRACTION_SYSTEM_PROMPT.startsWith("Верни только JSON по схеме.") && !/reasoning|поясни расчёт|объясни/i.test(EXTRACTION_SYSTEM_PROMPT),
     );
 
     const bathText = "Продаю каркасную баню 6×2,4 за 570 000 ₽. Москва и область";
@@ -149,17 +156,36 @@ async function main() {
       ),
     });
     const exactLog = logs.filter((line) => line.startsWith("[ai]")).at(-1) ?? "";
-    check("exact qualifier does not match from", exactLog.includes('"priceMatch":false'));
+    const fromText = "Каркасный дом от 1,8 млн, Москва и область";
+    check("deterministic qualifier replaces the model qualifier", exactLog.includes('"priceMatch":true'));
+    check(
+      "quality still distinguishes qualifier before align",
+      extractionQuality(fromText, facts({ product: "каркасный дом", price: 1800000, priceQualifier: "exact", locations: ["Москва", "Московская область"] })).priceMatch === false &&
+        alignListingFacts(fromText, facts({ product: "каркасный дом", price: 1800000, priceQualifier: "exact", locations: ["Москва", "Московская область"] })).priceQualifier === "from",
+    );
 
-    await routeListingExtraction({
+    const draft = { product: "баня", location: "Подольск", price: 570000, confirmed: true };
+    const priceEditCalls = { n: 0, user: "" };
+    const priceEdit = await routeListingExtraction({
       text: "Поменяй цену на 620000",
+      known: draft,
       config: base,
-      client: clientOf(facts({ intent: "edit_listing", price: 620000, priceQualifier: "exact", currency: "RUB" }), { n: 0, user: "" }),
+      client: clientOf(facts({ intent: "edit_listing", product: "", price: 1 }), priceEditCalls),
     });
     const editLog = logs.filter((line) => line.startsWith("[ai]")).at(-1) ?? "";
     check(
-      "edit price ignores empty product",
-      editLog.includes('"intentMatch":true') && editLog.includes('"changedFieldMatch":true') && !editLog.includes("productMatch"),
+      "clear price edit stays on rules",
+      priceEditCalls.n === 0 &&
+        priceEdit.apply === false &&
+        priceEdit.provider === "rules" &&
+        priceEdit.facts?.intent === "edit_listing" &&
+        priceEdit.facts.price === 620000 &&
+        editLog.includes('"provider":"rules"') &&
+        editLog.includes('"intent":"edit_listing"') &&
+        editLog.includes('"changedField":"price"') &&
+        !editLog.includes("620000") &&
+        !editLog.includes("Поменяй") &&
+        !editLog.includes("Подольск"),
     );
 
     const liveCalls = { n: 0, user: "" };
@@ -325,6 +351,12 @@ async function main() {
       "исправь цену на 490000",
     );
     check("explicit price edit updates", edited.price === 490000 && edited.conflict === false && edited.product === "баня");
+    const replaced = mergeListingFacts(
+      { product: "баня", location: "Подольск", price: 570000, confirmed: true },
+      facts({ intent: "edit_listing", price: 570 }),
+      "Поменяй цену на 620000",
+    );
+    check("edit price replaces a confirmed draft", replaced.price === 620000 && replaced.product === "баня" && replaced.location === "Подольск" && replaced.conflict === false);
 
     const blank = mergeListingFacts(
       { product: "баня", location: "Подольск", price: 500000, confirmed: true },
@@ -358,7 +390,25 @@ async function main() {
     check("bad schema falls back", broken.apply === false && broken.escalation === "schema");
     check(
       "schema failure logs issue codes without the model body",
-      brokenLog.includes('"validationIssueCodes":["invalid_json"]') && !brokenLog.includes('"{'),
+      brokenLog.includes('"validationIssueCodes":["invalid_json"]') && brokenLog.includes('"schemaFailureReason":"invalid_json"') && !brokenLog.includes('"{'),
+    );
+    const truncatedBody = "UNPARSED_LENGTH_BODY_620000";
+    const truncated = await routeListingExtraction({
+      text: "Продаю стол в Туле",
+      config: { ...base, shadow: false },
+      client: async () => ({ raw: truncatedBody, status: 200, outputTokens: 800, finishReason: "length" }),
+    });
+    const truncatedLog = logs.at(-1) ?? "";
+    const truncatedFile = readFileSync(join(tmpdir(), "avitoops-lite", "truncated.jsonl"), "utf8");
+    check(
+      "truncated json is telemetry without a journal body",
+      truncated.apply === false &&
+        truncated.escalation === "schema" &&
+        truncatedLog.includes('"finishReason":"length"') &&
+        truncatedLog.includes('"outputTokens":800') &&
+        truncatedLog.includes('"schemaFailureReason":"truncated"') &&
+        !truncatedLog.includes(truncatedBody) &&
+        truncatedFile.includes(truncatedBody),
     );
     const leaked = listingFactIssues({ intent: "create_listing", note: "ivan@example.com", price: "500000" });
     check(
@@ -474,6 +524,17 @@ async function main() {
     }
     const skipped = await routeListingExtraction({ text: "баня", config: base, client: circuitClient });
     check("circuit opens", circuitCalls.n === 5 && skipped.escalation === "circuit" && skipped.apply === false);
+    const duringCircuit = { n: 0 };
+    const cityEdit = await routeListingExtraction({
+      text: "Поменяй город на Чехов",
+      known: draft,
+      config: base,
+      client: failing("server", 503, duringCircuit),
+    });
+    check(
+      "circuit does not block a city edit",
+      duringCircuit.n === 0 && cityEdit.provider === "rules" && cityEdit.apply === false && cityEdit.facts?.locations[0] === "Чехов" && cityEdit.escalation == null,
+    );
 
     const sampled = { n: 0 };
     const sample = await routeListingExtraction({

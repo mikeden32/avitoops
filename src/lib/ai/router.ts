@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { logInfo } from "../redact";
 import { composeTask, type TaskState } from "../services/sale";
 import { seniorModelId } from "../grok";
@@ -9,6 +12,7 @@ import {
   alignListingFacts,
   canonicalDimensions,
   coerceListingFacts,
+  deterministicEdit,
   extractionQuality,
   liteReadyLine,
   listingFactIssues,
@@ -51,18 +55,30 @@ function liteClient(config: LiteConfig): LiteClient {
   return config.provider === "groq" ? groqLiteClient(config) : cloudruLiteClient(config);
 }
 
+function saveTruncatedLiteResponse(raw: string) {
+  try {
+    const dir = join(tmpdir(), "avitoops-lite");
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, "truncated.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), finishReason: "length", raw })}\n`, "utf8");
+  } catch {
+    // Local analysis only. The journal must not receive the model body.
+  }
+}
+
 export async function routeListingExtraction(input: RouteInput): Promise<RouteDecision> {
   const config = input.config ?? liteConfig();
   const senior = rulesNeedSenior(input.text);
-  if (!config.enabled) {
-    if (senior) {
-      logRoute({ task: "extract_listing", provider: "grok-senior", model: seniorModelId(), success: true, fallback: true, escalation: "strategy" });
-    }
-    return { apply: false, provider: senior ? "grok-senior" : "rules", fallbackUsed: false, escalation: senior ? "strategy" : undefined };
-  }
   if (senior) {
     logRoute({ task: "extract_listing", provider: "grok-senior", model: seniorModelId(), success: true, fallback: true, escalation: "strategy" });
     return { apply: false, provider: "grok-senior", fallbackUsed: true, escalation: "strategy" };
+  }
+  const edit = deterministicEdit(input.text);
+  if (edit) {
+    logRoute({ task: "extract_listing", provider: "rules", success: true, intent: "edit_listing", changedField: edit.changedField });
+    return { apply: false, provider: "rules", fallbackUsed: false, facts: edit.facts };
+  }
+  if (!config.enabled) {
+    return { apply: false, provider: "rules", fallbackUsed: false };
   }
   if (config.shadow) {
     const sample = input.sample ?? Math.random();
@@ -92,6 +108,9 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
     const latencyMs = Date.now() - started;
     if (!facts) {
       noteLiteFailure(config);
+      const finishReason = completion.finishReason ?? null;
+      const schemaFailureReason = finishReason === "length" ? "truncated" : parsed == null ? "invalid_json" : "schema";
+      if (finishReason === "length") saveTruncatedLiteResponse(completion.raw);
       logRoute({
         task: "extract_listing",
         provider,
@@ -104,6 +123,8 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
         escalation: "schema",
         inputTokens: completion.inputTokens ?? null,
         outputTokens: completion.outputTokens ?? null,
+        finishReason,
+        schemaFailureReason,
         ...listingFactIssues(parsed),
         ...(accepted.unexpectedFields.length ? { unexpectedFields: accepted.unexpectedFields } : {}),
       });
@@ -125,6 +146,7 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
       escalation: senior ? "strategy" : facts.needsSenior ? "senior" : merged.conflict ? "conflict" : null,
       inputTokens: completion.inputTokens ?? null,
       outputTokens: completion.outputTokens ?? null,
+      finishReason: completion.finishReason ?? null,
       ...extractionQuality(input.text, facts),
       ...(accepted.unexpectedFields.length ? { unexpectedFields: accepted.unexpectedFields } : {}),
     });

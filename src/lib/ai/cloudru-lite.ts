@@ -12,6 +12,7 @@ export function cloudruLiteClient(config: LiteConfig): LiteClient {
       timeoutMs,
       retryAfterMs: config.retryAfterMs,
       retried: false,
+      // A price edit once filled this cap with prose. Unambiguous edits no longer call the model.
       extra: { max_tokens: 800 },
     });
 }
