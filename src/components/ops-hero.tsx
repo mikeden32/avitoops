@@ -61,9 +61,9 @@ export function OpsHero() {
       setHistory(loaded.transcript.slice(-8));
       const last = [...loaded.transcript].reverse().find((turn) => turn.role === "assistant");
       if (last) setReply(last.content);
-      if (loaded.completeness === "ready" && loaded.title) {
+      if (loaded.product || loaded.location || loaded.price) {
         setPreview(previewFromTask(loaded));
-        setHandoff(true);
+        setHandoff(loaded.completeness === "ready" && Boolean(loaded.title));
         setPhase("ready");
       }
     });
@@ -116,8 +116,9 @@ export function OpsHero() {
         return;
       }
       setReply(result.reply);
-      if (result.task?.completeness === "ready" && result.task.title) {
-        setHandoff(true);
+      if (result.task && (result.task.product || result.task.location || result.task.price)) {
+        const complete = result.task.completeness === "ready" && Boolean(result.task.title);
+        setHandoff(complete);
         setPreview(previewFromTask(result.task));
       } else if (result.card) {
         setHandoff(false);
@@ -144,7 +145,7 @@ export function OpsHero() {
         return next.slice(-8);
       });
       setDraft("");
-      if (result.task?.completeness === "ready" || result.card) setPhase("building");
+      if ((result.task && (result.task.product || result.task.location || result.task.price)) || result.card) setPhase("building");
       if (result.audio) playVoice(result.audio);
     } catch {
       setPhase("error");

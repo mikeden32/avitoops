@@ -80,6 +80,8 @@ async function main() {
         unknown.task.location === "Тула" &&
         unknown.task.price == null &&
         unknown.task.attributes.priceStatus === "unknown" &&
+        questions(unknown.reply) === 1 &&
+        /размер/i.test(unknown.reply) &&
         !/какую цену/i.test(unknown.reply) &&
         unknown.reply.includes("не определена"),
     );

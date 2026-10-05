@@ -199,8 +199,12 @@ function fallbackLine(facts: BrainFacts) {
   if (facts.priceDeferred && facts.product && !facts.location) {
     return `Цена пока не определена — это нормально. Могу позже помочь с ориентиром. Где находится ${facts.product}?`;
   }
+  if (facts.priceDeferred && facts.product && facts.location && !facts.size) {
+    const owner = whereWord(facts.product) === "она" ? "неё" : "него";
+    return `Цена пока не определена — это нормально. ${cap(facts.product)} ${inPlace(facts.location)} уже записал. Какой у ${owner} размер?`;
+  }
   if (facts.priceDeferred && facts.product && facts.location) {
-    return `Цена пока не определена — это нормально. ${cap(facts.product)} ${inPlace(facts.location)} уже записал. Размер, если знаете, можно добавить следом.`;
+    return `Цена пока не определена — это нормально. ${cap(facts.product)} ${inPlace(facts.location)} уже записал. Могу собрать черновик без цены. Сохранить его?`;
   }
   if (facts.product && !facts.location) return `Понял, продаём ${selling(facts.product)}. Где ${whereWord(facts.product)} находится?`;
   if (facts.product && facts.location && !facts.price) return `Записал: ${facts.location}. Какую цену поставить?`;
@@ -242,6 +246,7 @@ function acceptSpeech(raw: string | null, facts: BrainFacts) {
   if (next && !complete && questions(message) === 0 && !message.includes(next)) message = `${message} ${next}`;
   if (!message || questions(message) > 1) return { facts: nextFacts, message: null };
   if (complete && questions(message) > 0) return { facts: nextFacts, message: null };
+  if (!complete && questions(message) === 0) return { facts: nextFacts, message: null };
   if (asksKnown(message, nextFacts) || /заполните|обязательн|необходимо указать|\bproduct\b|\blocation\b/i.test(message)) {
     return { facts: nextFacts, message: null };
   }
