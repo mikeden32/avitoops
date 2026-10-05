@@ -76,6 +76,10 @@ function saveTruncatedLiteResponse(raw: string) {
   }
 }
 
+function thinkingTelemetry(disabled: boolean | undefined): { thinkingDisabled?: true } {
+  return disabled ? { thinkingDisabled: true } : {};
+}
+
 function liteBudget(config: LiteConfig) {
   return {
     executionMode: config.shadow ? ("shadow" as const) : ("apply" as const),
@@ -158,6 +162,7 @@ async function routeListingExtractionBody(input: RouteInput): Promise<RouteDecis
         inputTokens: completion.inputTokens ?? null,
         outputTokens: completion.outputTokens ?? null,
         finishReason,
+        ...thinkingTelemetry(completion.thinkingDisabled),
         ...(schemaFailureReason ? { schemaFailureReason } : {}),
         ...listingFactIssues(parsed),
         ...(accepted.unexpectedFields.length ? { unexpectedFields: accepted.unexpectedFields } : {}),
@@ -185,6 +190,7 @@ async function routeListingExtractionBody(input: RouteInput): Promise<RouteDecis
       inputTokens: completion.inputTokens ?? null,
       outputTokens: completion.outputTokens ?? null,
       finishReason,
+      ...thinkingTelemetry(completion.thinkingDisabled),
       ...extractionQuality(input.text, facts),
       ...(accepted.unexpectedFields.length ? { unexpectedFields: accepted.unexpectedFields } : {}),
     });
@@ -228,6 +234,7 @@ async function routeListingExtractionBody(input: RouteInput): Promise<RouteDecis
       schemaValid: false,
       accepted: false,
       rejectionReason: kind === "timeout" ? "timeout" : "provider_error",
+      ...thinkingTelemetry(error instanceof LiteCallError ? error.thinkingDisabled : undefined),
       error: kind,
       errorType: error instanceof LiteCallError ? error.errorType ?? null : null,
       errorCode: error instanceof LiteCallError ? error.errorCode ?? null : null,

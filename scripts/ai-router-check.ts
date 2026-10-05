@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { resetLiteCircuit } from "../src/lib/ai/circuit";
 import { seniorModelId } from "../src/lib/grok";
 import { liteConfig } from "../src/lib/ai/config";
-import { cloudruLiteClient } from "../src/lib/ai/cloudru-lite";
+import { cloudruLiteClient, getCloudruModelOptions } from "../src/lib/ai/cloudru-lite";
 import { LiteCallError } from "../src/lib/ai/groq-lite";
 import { EXTRACTION_SYSTEM_PROMPT, LISTING_FACTS_JSON_SCHEMA, alignListingFacts, extractionQuality, listingFactIssues, mergeListingFacts, rulesNeedSenior, type ListingFacts } from "../src/lib/ai/listing-facts";
 import { routeListingExtraction, type AiProvider } from "../src/lib/ai/router";
@@ -107,6 +107,7 @@ async function main() {
     const rulesAfter = composeTask(applyFacts(emptyFacts(), bathText));
     check("shadow does not change the card", shadow.apply === false && JSON.stringify(rulesCard) === JSON.stringify(rulesAfter));
     check("shadow still observed", bathCalls.n === 1 && shadow.provider === "cloudru-lite" && shadow.apply === false);
+    check("default model log does not claim thinking disabled", !(logs.filter((line) => line.includes("[ai]")).at(-1) ?? "").includes("thinkingDisabled"));
     const shadowLog = logs.filter((line) => line.startsWith("[ai]")).at(-1) ?? "";
     check(
       "create metrics use one contract",
@@ -674,6 +675,8 @@ async function main() {
         lastBody.includes('"type":"json_schema"') &&
         lastBody.includes("ai-sage/GigaChat3-10B-A1.8B") &&
         !lastBody.includes("reasoning_effort") &&
+        !lastBody.includes("enable_thinking") &&
+        !lastBody.includes("chat_template_kwargs") &&
         !lastBody.includes("test-key"),
     );
 
@@ -732,6 +735,140 @@ async function main() {
     check("fetch 5xx is server", classified[2]?.kind === "server" && classified[2].status === 503);
     check("fetch 401 is auth", classified[3]?.kind === "auth" && classified[3].message === "bad key [key]");
     check("fetch 408 is timeout", classified[4]?.kind === "timeout" && classified[4].status === 408);
+
+    check(
+      "qwen options disable thinking",
+      JSON.stringify(getCloudruModelOptions("Qwen/Qwen3.6-35B-A3B")) === '{"chat_template_kwargs":{"enable_thinking":false}}',
+    );
+    check(
+      "other cloudru models have no extra options",
+      JSON.stringify(getCloudruModelOptions("ai-sage/GigaChat3.5-432B-A28B")) === "{}" &&
+        JSON.stringify(getCloudruModelOptions("ai-sage/GigaChat3-10B-A1.8B")) === "{}" &&
+        JSON.stringify(getCloudruModelOptions("Qwen/Qwen3-Coder-Next")) === "{}",
+    );
+
+    const qwenConfig: LiteConfig = { ...base, model: "Qwen/Qwen3.6-35B-A3B" };
+    let qwenBody = "";
+    globalThis.fetch = (async (_url: unknown, init?: { body?: unknown }) => {
+      qwenBody = String(init?.body ?? "");
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: { content: JSON.stringify(facts({ product: "баня", price: 500000, priceQualifier: "exact", locations: ["Подольск"] })) },
+            },
+          ],
+          usage: { prompt_tokens: 20, completion_tokens: 110 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as typeof fetch;
+    resetLiteCircuit();
+    const qwenDecision = await routeListingExtraction({
+      text: "Продаю баню за 500000 в Подольске",
+      config: qwenConfig,
+      client: cloudruLiteClient(qwenConfig),
+    });
+    const qwenLog = logs.at(-1) ?? "";
+    const qwenRequest = JSON.parse(qwenBody) as {
+      model?: string;
+      max_tokens?: number;
+      chat_template_kwargs?: { enable_thinking?: boolean };
+    };
+    check(
+      "qwen3.6 request disables thinking",
+      qwenRequest.model === "Qwen/Qwen3.6-35B-A3B" &&
+        qwenRequest.max_tokens === 800 &&
+        qwenRequest.chat_template_kwargs?.enable_thinking === false &&
+        !qwenBody.includes("reasoning_effort"),
+    );
+    check(
+      "qwen3.6 shadow log marks thinking disabled",
+      qwenDecision.apply === false &&
+        qwenDecision.provider === "cloudru-lite" &&
+        qwenLog.includes('"thinkingDisabled":true') &&
+        qwenLog.includes('"model":"Qwen/Qwen3.6-35B-A3B"') &&
+        qwenLog.includes('"schemaValid":true') &&
+        qwenLog.includes('"accepted":true') &&
+        qwenLog.includes('"finishReason":"stop"') &&
+        qwenLog.includes('"outputTokens":110') &&
+        qwenLog.includes('"rejectionReason":null') &&
+        qwenLog.includes('"latencyMs":') &&
+        !qwenLog.includes("Продаю баню") &&
+        !qwenLog.includes("Подольск"),
+    );
+
+    let otherBody = "";
+    globalThis.fetch = (async (_url: unknown, init?: { body?: unknown }) => {
+      otherBody = String(init?.body ?? "");
+      return new Response(
+        JSON.stringify({
+          choices: [{ finish_reason: "stop", message: { content: JSON.stringify(facts({ product: "стол", locations: ["Тула"] })) } }],
+          usage: { completion_tokens: 40 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as typeof fetch;
+    await cloudruLiteClient(base)({ system: "s", user: "u", timeoutMs: 1000 });
+    check(
+      "gigachat request has no thinking kwargs",
+      !otherBody.includes("chat_template_kwargs") && !otherBody.includes("enable_thinking") && otherBody.includes('"max_tokens":800'),
+    );
+    otherBody = "";
+    await cloudruLiteClient({ ...base, model: "ai-sage/GigaChat3.5-432B-A28B" })({ system: "s", user: "u", timeoutMs: 1000 });
+    check(
+      "production gigachat request has no thinking kwargs",
+      otherBody.includes("GigaChat3.5-432B-A28B") && !otherBody.includes("enable_thinking") && !otherBody.includes("chat_template_kwargs"),
+    );
+
+    resetLiteCircuit();
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ choices: [{ finish_reason: "length", message: { content: "" } }], usage: { completion_tokens: 800 } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+    const lengthDecision = await routeListingExtraction({
+      text: "Продаю баню за 500000 в Подольске",
+      config: qwenConfig,
+      client: cloudruLiteClient(qwenConfig),
+    });
+    const lengthLog = logs.at(-1) ?? "";
+    check(
+      "empty thinking response is rejected as truncated",
+      lengthDecision.apply === false &&
+        lengthDecision.provider === "grok-senior" &&
+        lengthDecision.escalation === "senior" &&
+        lengthLog.includes('"rejectionReason":"truncated"') &&
+        lengthLog.includes('"finishReason":"length"') &&
+        lengthLog.includes('"outputTokens":800') &&
+        lengthLog.includes('"thinkingDisabled":true') &&
+        lengthLog.includes('"schemaValid":false') &&
+        lengthLog.includes('"accepted":false') &&
+        !lengthLog.includes("Продаю"),
+    );
+
+    resetLiteCircuit();
+    globalThis.fetch = (async () => {
+      const error = new Error("timed out");
+      error.name = "TimeoutError";
+      throw error;
+    }) as typeof fetch;
+    const qwenTimeout = await routeListingExtraction({
+      text: "баня в Подольске",
+      config: qwenConfig,
+      client: cloudruLiteClient(qwenConfig),
+    });
+    const qwenTimeoutLog = logs.at(-1) ?? "";
+    check(
+      "qwen timeout records thinking disabled",
+      qwenTimeout.apply === false &&
+        qwenTimeout.escalation === "timeout" &&
+        qwenTimeout.provider === "rules" &&
+        qwenTimeoutLog.includes('"thinkingDisabled":true') &&
+        qwenTimeoutLog.includes('"rejectionReason":"timeout"') &&
+        !qwenTimeoutLog.includes("Подольск"),
+    );
 
     globalThis.fetch = originalFetch;
     if (savedKey === undefined) delete process.env.CLOUDRU_API_KEY;

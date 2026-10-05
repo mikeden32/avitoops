@@ -14,6 +14,7 @@ export class LiteCallError extends Error {
   readonly errorType?: string;
   readonly errorCode?: string;
   readonly errorMessage?: string;
+  thinkingDisabled?: boolean;
 
   constructor(
     readonly kind: LiteErrorKind,
@@ -62,6 +63,7 @@ export type LiteCompletion = {
   inputTokens?: number;
   outputTokens?: number;
   finishReason?: string;
+  thinkingDisabled?: boolean;
 };
 
 export type LiteClient = (input: { system: string; user: string; timeoutMs: number }) => Promise<LiteCompletion>;
@@ -159,14 +161,15 @@ export async function completeOpenAIChat(input: {
     choices?: { finish_reason?: string; message?: { content?: string } }[];
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
-  const raw = data.choices?.[0]?.message?.content?.trim();
-  if (!raw) throw new LiteCallError("schema", response.status);
+  const finishReason = data.choices?.[0]?.finish_reason;
+  const raw = data.choices?.[0]?.message?.content?.trim() ?? "";
+  if (!raw && finishReason !== "length") throw new LiteCallError("schema", response.status);
   return {
     raw,
     status: response.status,
     inputTokens: data.usage?.prompt_tokens,
     outputTokens: data.usage?.completion_tokens,
-    finishReason: data.choices?.[0]?.finish_reason,
+    finishReason,
   };
 }
 
