@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { guideGuestOnboarding, type SeniorClient } from "../src/lib/ai/onboarding";
+import { classifyGrokHttp, GrokCallError } from "../src/lib/grok";
 import { deterministicEdit } from "../src/lib/ai/listing-facts";
 import { composeTask, emptyFacts } from "../src/lib/services/sale";
 import { loadEnv } from "./load-env";
@@ -189,6 +190,35 @@ async function main() {
       down.route === "fallback" && down.seniorCalls === 1 && down.task.product === "баня" && questions(down.reply) === 1 && down.fallbackReason === "unavailable",
     );
 
+    const region = classifyGrokHttp(403, null, "<html><p>This service is not available in your region.</p></html>");
+    const auth = classifyGrokHttp(401, "req-1", JSON.stringify({ error: { message: "Incorrect API key", type: "authentication_error", code: "invalid_api_key" } }));
+    const missingModel = classifyGrokHttp(400, null, JSON.stringify({ error: { message: "Model grok-4.6 not found", code: "model_not_found" } }));
+    check(
+      "senior http errors keep a safe class",
+      region.providerErrorType === "region" &&
+        region.providerMessageClass === "region_unavailable" &&
+        auth.providerErrorType === "auth" &&
+        auth.providerErrorCode === "invalid_api_key" &&
+        auth.providerRequestId === "req-1" &&
+        missingModel.providerErrorType === "model_not_found",
+    );
+    const blocked = await guideGuestOnboarding({
+      text: "Хочу продать баню",
+      task: blank,
+      senior: async () => {
+        throw new GrokCallError(region);
+      },
+    });
+    check(
+      "regional block keeps the one-question fallback",
+      blocked.route === "fallback" &&
+        blocked.seniorCalls === 1 &&
+        blocked.fallbackReason === "provider_error" &&
+        blocked.task.product === "баня" &&
+        questions(blocked.reply) === 1 &&
+        !blocked.reply.includes("какую цену"),
+    );
+
     loadEnv();
     const { curatorTurn } = await import("../src/lib/services/dispatch");
     const guestEdit = await curatorTurn(null, "Поменяй цену на 620000", [], {
@@ -213,6 +243,9 @@ async function main() {
       "telemetry skips the user text",
       aiLog.includes('"route":"guided-senior"') &&
         aiLog.includes('"seniorCalls":1') &&
+        aiLog.includes('"providerErrorType":"region"') &&
+        aiLog.includes('"providerStatus":403') &&
+        aiLog.includes('"fallback":true') &&
         !aiLog.includes("Хочу продать") &&
         !aiLog.includes("Подольск") &&
         !aiLog.includes("570"),

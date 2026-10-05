@@ -1,4 +1,4 @@
-import { askGrok } from "../src/lib/grok";
+import { askGrok, GrokCallError } from "../src/lib/grok";
 import { loadEnv } from "./load-env";
 
 loadEnv();
@@ -17,6 +17,16 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
+  if (error instanceof GrokCallError) {
+    console.error(JSON.stringify({
+      providerStatus: error.providerStatus,
+      providerErrorType: error.providerErrorType,
+      providerErrorCode: error.providerErrorCode,
+      providerRequestId: error.providerRequestId,
+      providerMessageClass: error.providerMessageClass,
+    }));
+  } else {
+    console.error(error instanceof Error ? error.message : error);
+  }
   process.exit(1);
 });

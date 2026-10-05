@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { askGrok } from "../grok";
+import { askGrok, GrokCallError, seniorModelId } from "../grok";
 import { logInfo } from "../redact";
 import { formatRub } from "../format";
 import { speak } from "../curator";
@@ -273,6 +273,7 @@ function finish(input: {
   intent: string;
   fallbackReason?: string;
   success: boolean;
+  telemetry?: Record<string, unknown>;
 }): OnboardingTurn {
   const task = taskOf(input.facts);
   const reply = speak(input.reply);
@@ -303,6 +304,7 @@ function finish(input: {
       success: input.success,
       seniorCalls: turn.seniorCalls,
       ...(turn.fallbackReason ? { fallbackReason: turn.fallbackReason } : {}),
+      ...(input.telemetry ?? {}),
     })}`,
   );
   return turn;
@@ -377,6 +379,7 @@ export async function guideGuestOnboarding(input: {
   let seniorCalls = 0;
   let fallbackReason: string | undefined;
   let speech: string | null = null;
+  let telemetry: Record<string, unknown> | undefined;
   let facts = heard;
   try {
     seniorCalls = 1;
@@ -403,9 +406,22 @@ export async function guideGuestOnboarding(input: {
     } else if (raw) fallbackReason = "senior_message";
   } catch (error) {
     const name = error instanceof Error ? error.name : "";
-    fallbackReason = name === "TimeoutError" || name === "AbortError" ? "timeout" : "provider_error";
+    const timedOut = name === "TimeoutError" || name === "AbortError";
+    fallbackReason = timedOut ? "timeout" : "provider_error";
+    const failure = error instanceof GrokCallError ? error : null;
+    telemetry = {
+      provider: "grok-senior",
+      model: seniorModelId(),
+      providerStatus: failure?.providerStatus ?? null,
+      providerErrorType: failure?.providerErrorType ?? (timedOut ? "timeout" : "unknown"),
+      ...(failure?.providerErrorCode ? { providerErrorCode: failure.providerErrorCode } : {}),
+      ...(failure?.providerRequestId ? { providerRequestId: failure.providerRequestId } : {}),
+      ...(failure?.providerMessageClass ? { providerMessageClass: failure.providerMessageClass } : {}),
+      fallback: true,
+    };
   }
   const reply = speech ?? fallbackLine(facts);
+  const live = input.senior === undefined;
   return finish({
     started,
     route: strategy ? "strategy-senior" : speech ? "guided-senior" : "fallback",
@@ -416,5 +432,17 @@ export async function guideGuestOnboarding(input: {
     intent: strategy ? "strategy" : "create_listing",
     success: Boolean(speech),
     ...(speech ? {} : { fallbackReason }),
+    ...(telemetry
+      ? { telemetry }
+      : live && seniorCalls > 0
+        ? {
+            telemetry: {
+              provider: "grok-senior",
+              model: seniorModelId(),
+              providerStatus: speech ? 200 : null,
+              fallback: !speech,
+            },
+          }
+        : {}),
   });
 }
