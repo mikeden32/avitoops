@@ -8,6 +8,7 @@ export type LiteConfig = {
   model: string;
   baseUrl: string;
   timeoutMs: number;
+  shadowTimeoutMs: number;
   failureThreshold: number;
   cooldownMs: number;
   retryAfterMs: number;
@@ -20,6 +21,12 @@ export const CLOUDRU_LITE_MODEL = "ai-sage/GigaChat3.5-432B-A28B";
 function numberFrom(raw: string | undefined, fallback: number) {
   const value = Number(raw);
   return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+export function liteShadowTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
+  const value = Number(env.AI_LITE_SHADOW_TIMEOUT_MS);
+  if (!Number.isInteger(value) || value < 3500 || value > 15000) return 10000;
+  return value;
 }
 
 export function liteMaxOutputTokens(env: NodeJS.ProcessEnv = process.env) {
@@ -42,6 +49,7 @@ export function liteConfig(env: NodeJS.ProcessEnv = process.env): LiteConfig {
     model,
     baseUrl,
     timeoutMs: numberFrom(env.AI_LITE_TIMEOUT_MS, 3500) || 3500,
+    shadowTimeoutMs: liteShadowTimeoutMs(env),
     failureThreshold: numberFrom(env.AI_LITE_FAILURE_THRESHOLD, 5) || 5,
     cooldownMs: numberFrom(env.AI_LITE_COOLDOWN_MS, 60_000) || 60_000,
     retryAfterMs: 1000,

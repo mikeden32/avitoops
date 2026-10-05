@@ -115,6 +115,7 @@ const base: LiteConfig = {
   model: "ai-sage/GigaChat3-10B-A1.8B",
   baseUrl: "https://foundation-models.api.cloud.ru/v1",
   timeoutMs: 3500,
+  shadowTimeoutMs: 10000,
   failureThreshold: 5,
   cooldownMs: 60_000,
   retryAfterMs: 1000,

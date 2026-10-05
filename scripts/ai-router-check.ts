@@ -20,6 +20,7 @@ const base: LiteConfig = {
   model: "ai-sage/GigaChat3-10B-A1.8B",
   baseUrl: "https://foundation-models.api.cloud.ru/v1",
   timeoutMs: 3500,
+  shadowTimeoutMs: 10000,
   failureThreshold: 5,
   cooldownMs: 60_000,
   retryAfterMs: 1000,
@@ -115,8 +116,41 @@ async function main() {
         shadowLog.includes('"locationMatch":true') &&
         shadowLog.includes('"dimensionsMatch":true') &&
         shadowLog.includes('"accepted":true') &&
-        shadowLog.includes('"rejectionReason":null'),
+        shadowLog.includes('"rejectionReason":null') &&
+        shadowLog.includes('"executionMode":"shadow"') &&
+        shadowLog.includes('"timeoutMs":10000'),
     );
+    let shadowBudget = 0;
+    let applyBudget = 0;
+    await routeListingExtraction({
+      text: "Продаю баню за 500000 в Подольске",
+      config: { ...base, shadow: true },
+      client: async (input) => {
+        shadowBudget = input.timeoutMs;
+        return { raw: JSON.stringify(facts({ product: "баня", price: 500000, priceQualifier: "exact", locations: ["Подольск"] })), status: 200 };
+      },
+    });
+    await routeListingExtraction({
+      text: "Продаю баню за 500000 в Подольске",
+      config: { ...base, shadow: false },
+      client: async (input) => {
+        applyBudget = input.timeoutMs;
+        return { raw: JSON.stringify(facts({ product: "баня", price: 500000, priceQualifier: "exact", locations: ["Подольск"] })), status: 200 };
+      },
+    });
+    const applyModeLog = logs.filter((line) => line.startsWith("[ai]")).at(-1) ?? "";
+    check(
+      "shadow and apply keep separate timeouts",
+      shadowBudget === 10000 && applyBudget === 3500 && applyModeLog.includes('"executionMode":"apply"') && applyModeLog.includes('"timeoutMs":3500'),
+    );
+    const contained = await routeListingExtraction({
+      text: "Продаю баню за 500000 в Подольске",
+      config: base,
+      client: async () => {
+        throw new Error("boom");
+      },
+    });
+    check("client failure stays inside the router", contained.apply === false && contained.fallbackUsed && contained.escalation === "network");
 
     const omittedCalls = { n: 0, user: "" };
     const omitted = await routeListingExtraction({
@@ -723,6 +757,7 @@ async function main() {
         configured.model === "ai-sage/GigaChat3.5-432B-A28B" &&
         configured.baseUrl === "https://foundation-models.api.cloud.ru/v1" &&
         configured.timeoutMs === 3500 &&
+        configured.shadowTimeoutMs === 10000 &&
         configured.maxOutputTokens === 800,
     );
     const savedMaxTokens = process.env.AI_LITE_MAX_OUTPUT_TOKENS;
@@ -732,6 +767,15 @@ async function main() {
     check("oversized max output tokens stay at the fallback", liteConfig().maxOutputTokens === 800);
     if (savedMaxTokens === undefined) delete process.env.AI_LITE_MAX_OUTPUT_TOKENS;
     else process.env.AI_LITE_MAX_OUTPUT_TOKENS = savedMaxTokens;
+    const savedShadowTimeout = process.env.AI_LITE_SHADOW_TIMEOUT_MS;
+    process.env.AI_LITE_SHADOW_TIMEOUT_MS = "12000";
+    check("shadow timeout comes from env", liteConfig().shadowTimeoutMs === 12000 && liteConfig().timeoutMs === 3500);
+    process.env.AI_LITE_SHADOW_TIMEOUT_MS = "2000";
+    check("short shadow timeout stays at the default", liteConfig().shadowTimeoutMs === 10000);
+    process.env.AI_LITE_SHADOW_TIMEOUT_MS = "20000";
+    check("long shadow timeout stays at the default", liteConfig().shadowTimeoutMs === 10000);
+    if (savedShadowTimeout === undefined) delete process.env.AI_LITE_SHADOW_TIMEOUT_MS;
+    else process.env.AI_LITE_SHADOW_TIMEOUT_MS = savedShadowTimeout;
     process.env.AI_LITE_PROVIDER = "groq";
     process.env.GROQ_API_KEY = "test-key";
     process.env.GROQ_LITE_MODEL = "openai/gpt-oss-20b";

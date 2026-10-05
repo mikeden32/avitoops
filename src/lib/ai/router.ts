@@ -76,7 +76,22 @@ function saveTruncatedLiteResponse(raw: string) {
   }
 }
 
+function liteBudget(config: LiteConfig) {
+  return {
+    executionMode: config.shadow ? ("shadow" as const) : ("apply" as const),
+    timeoutMs: config.shadow ? config.shadowTimeoutMs : config.timeoutMs,
+  };
+}
+
 export async function routeListingExtraction(input: RouteInput): Promise<RouteDecision> {
+  try {
+    return await routeListingExtractionBody(input);
+  } catch {
+    return { apply: false, provider: "rules", fallbackUsed: true, escalation: "provider_error" };
+  }
+}
+
+async function routeListingExtractionBody(input: RouteInput): Promise<RouteDecision> {
   const config = input.config ?? liteConfig();
   const senior = rulesNeedSenior(input.text);
   if (senior) {
@@ -105,9 +120,10 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
   const started = Date.now();
   const client = input.client ?? liteClient(config);
   const provider = liteProvider(config);
+  const budget = liteBudget(config);
   try {
     const request = extractionRequest(input.text, input.known);
-    const completion = await client({ ...request, timeoutMs: config.timeoutMs });
+    const completion = await client({ ...request, timeoutMs: budget.timeoutMs });
     let parsed: unknown;
     try {
       parsed = JSON.parse(completion.raw) as unknown;
@@ -132,6 +148,8 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
         success: Boolean(facts),
         fallback: true,
         shadow: config.shadow,
+        executionMode: budget.executionMode,
+        timeoutMs: budget.timeoutMs,
         status: completion.status,
         schemaValid: Boolean(facts),
         accepted: false,
@@ -157,6 +175,8 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
       success: true,
       fallback: escalate,
       shadow: config.shadow,
+      executionMode: budget.executionMode,
+      timeoutMs: budget.timeoutMs,
       status: completion.status,
       schemaValid: true,
       accepted: true,
@@ -202,6 +222,8 @@ export async function routeListingExtraction(input: RouteInput): Promise<RouteDe
       latencyMs: Date.now() - started,
       success: false,
       fallback: true,
+      executionMode: budget.executionMode,
+      timeoutMs: budget.timeoutMs,
       status,
       schemaValid: false,
       accepted: false,
