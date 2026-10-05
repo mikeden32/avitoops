@@ -107,19 +107,29 @@ function storedTurns(value: unknown): StoredTurn[] {
   return turns.slice(-16);
 }
 
-function stateFromRow(row: { product: string | null; location: string | null; price: number | null }) {
-  return composeTask({
+function stateFromRow(row: {
+  product: string | null;
+  location: string | null;
+  price: number | null;
+  attributes?: Record<string, string> | null;
+}) {
+  const task = composeTask({
     product: row.product ? showDim(row.product) : null,
     location: row.location,
     price: row.price,
   });
+  const attributes = { ...(row.attributes ?? {}) };
+  if (task.attributes.size) attributes.size = task.attributes.size;
+  if (task.price) delete attributes.priceStatus;
+  return { ...task, attributes };
 }
 
 function toView(state: TaskState, turns: StoredTurn[]): GuestTaskView {
-  const shown = composeTask({
+  const shown = stateFromRow({
     product: state.product ? showDim(state.product) : null,
     location: state.location,
     price: state.price,
+    attributes: state.attributes,
   });
   return {
     ...shown,

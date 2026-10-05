@@ -8,6 +8,7 @@ import type { Plan } from "../db/schema";
 import { AppError } from "../errors";
 import { type Upload, assertUploads, compressPhoto, inboxFile } from "../files";
 import { askGrok } from "../grok";
+import { guideGuestOnboarding, type SeniorClient } from "../ai/onboarding";
 import { DAILY_QUOTA, agentFillsProfile } from "../plans";
 import { guestPriceLine, speak } from "../curator";
 import {
@@ -23,7 +24,7 @@ import {
   nextSteps,
   resumeOpening,
 } from "./guide";
-import type { AssistantCard, SaleBrief, TaskState } from "./sale";
+import { composeTask, factsFromSale, type AssistantCard, type SaleBrief, type TaskState } from "./sale";
 import { pauseSubscription } from "./access";
 import { getDepositBalance } from "./billing";
 import { planOf, queuedCount, quotaFor, slotsTaken, startedToday, trialLive } from "./daily";
@@ -653,13 +654,20 @@ export async function curatorTurn(
   userId: string | null,
   text: string,
   photos: Upload[] = [],
-  options?: { useModel?: boolean; sale?: SaleBrief },
+  options?: { useModel?: boolean; sale?: SaleBrief; task?: TaskState; senior?: SeniorClient },
 ): Promise<CuratorResult> {
   const message = text.trim();
   const sale = options?.sale ?? {};
   if (!message) return { handled: false, reply: "" };
   if (!userId) {
-    if (proposeAssignment(message) || isYes(message) || isNo(message) || /вылож|пауз|продвига|цену/.test(fold(message))) {
+    const task = options?.task ?? composeTask(factsFromSale(sale));
+    if (!isYes(message) && !isNo(message)) {
+      const guided = await guideGuestOnboarding({ text: message, task, senior: options?.senior });
+      if (guided.handled) {
+        return { handled: true, reply: guided.reply, action: guided.action, sale: guided.sale, task: guided.task };
+      }
+    }
+    if (proposeAssignment(message) || isYes(message) || isNo(message) || /пауз|продвига/.test(fold(message))) {
       return { handled: true, reply: speak(`${guestPriceLine()} Задачи без регистрации не создаются.`) };
     }
     const guest = guideGuest(message, sale);

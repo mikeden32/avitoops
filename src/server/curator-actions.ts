@@ -148,7 +148,7 @@ export async function askCurator(
   const fromServer = Boolean(serverSale && saleFilled(serverSale));
   if (fromServer) await clearSale();
   const sale = userId ? (fromServer && serverSale ? serverSale : await readSale()) : saleFromFacts(prior?.state ?? { product: null, location: null, price: null });
-  const turned = await curatorTurn(userId, parsedMessage.data, photos, { useModel, sale });
+  const turned = await curatorTurn(userId, parsedMessage.data, photos, { useModel, sale, task: prior?.state });
   if (!userId && prior) {
     const reply = turned.handled ? turned.reply : speak(await replyAsCurator(parsedMessage.data, history, cabinet, useModel));
     const rulesTask = turned.task ?? prior.state;
