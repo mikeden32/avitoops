@@ -78,7 +78,6 @@ function main() {
     task,
     senior,
   }).then((turn) => {
-    console.log = previous;
     const aiLog = logs.filter((line) => line.includes("guided_onboarding")).join("\n");
     check(
       "C wiring keeps the declarative reply",
@@ -87,13 +86,33 @@ function main() {
         turn.action?.href === "/register?from=task" &&
         !turn.reply.includes("?") &&
         turn.reply.includes("черновик") &&
+        aiLog.includes('"providerStatus":200') &&
         aiLog.includes('"seniorAcceptance":"accepted"') &&
+        aiLog.includes('"fallback":false') &&
         aiLog.includes('"contractViolation":"extra_next_question"') &&
         aiLog.includes('"readyForDraft":true') &&
         aiLog.includes('"schemaValid":true') &&
         !aiLog.includes("Хотите") &&
         !aiLog.includes("Продаю баню"),
     );
+    return guideGuestOnboarding({
+      text: "Продаю баню 6 на 4 в Чехове за 620000",
+      task,
+      senior: async () => packet("Хотите, я усилю заголовок?", null),
+    });
+  }).then(() => {
+    const aiLog = logs.filter((line) => line.includes("guided_onboarding")).join("\n");
+    check(
+      "rejected wording still records provider 200",
+      aiLog.includes('"providerStatus":200') &&
+        aiLog.includes('"seniorAcceptance":"question_when_complete"') &&
+        aiLog.includes('"fallback":true') &&
+        !aiLog.includes("Хотите") &&
+        !aiLog.includes("Продаю баню"),
+    );
+  }).finally(() => {
+    console.log = previous;
+  }).then(() => {
     console.log("senior acceptance check passed");
   });
 }

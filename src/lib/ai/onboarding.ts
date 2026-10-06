@@ -443,6 +443,7 @@ export async function guideGuestOnboarding(input: {
   let speech: string | null = null;
   let telemetry: Record<string, unknown> | undefined;
   let acceptanceFields: Record<string, unknown> | undefined;
+  let seniorResponded = false;
   let facts = heard;
   try {
     seniorCalls = 1;
@@ -462,6 +463,7 @@ export async function guideGuestOnboarding(input: {
     });
     if (!raw) fallbackReason = "unavailable";
     else {
+      seniorResponded = true;
       const judged = judgeSeniorSpeech(raw, heard);
       facts = judged.facts;
       speech = judged.message;
@@ -497,9 +499,9 @@ export async function guideGuestOnboarding(input: {
                 provider: "grok-senior",
                 ...(transport ? { transport } : {}),
                 model: seniorModelId(),
-                providerStatus: speech ? 200 : null,
               }
             : {}),
+          ...(seniorCalls > 0 ? { providerStatus: seniorResponded ? 200 : null } : {}),
           ...(acceptanceFields ?? {}),
           ...(telemetry ?? {}),
           fallback: telemetry ? true : !speech,
