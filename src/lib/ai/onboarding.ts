@@ -52,9 +52,13 @@ type BrainFacts = TaskFacts & { size: string | null; priceDeferred: boolean };
 const SYSTEM = [
   "Ты OPS, AI-авитолог AvitoOps. Веди человека к объявлению обычным русским языком.",
   "Верни только JSON: intent, message, nextQuestion, draftPatch.product, readyForDraft, offerEnhancement.",
-  "В message максимум один вопрос. Не перечисляй анкету.",
+  "В message максимум один вопросительный знак. Не перечисляй анкету.",
   "Не спрашивай поле, которое уже есть во facts. Если priceDeferred, не проси цену.",
-  "Если есть product, location и price, не задавай вопрос: подтверди данные и предложи усилить заголовок и описание.",
+  "Если во facts уже есть product, location и price: message без вопросительного знака, nextQuestion строго null, readyForDraft true, offerEnhancement true.",
+  "Тогда message — короткое подтверждение. Можно сказать, что черновик собран и ты можешь усилить заголовок и описание. Не задавай вопрос и не спрашивай разрешения.",
+  "Пример смысла: Понял. Баня 6×4 в Чехове, цена 620 000 ₽. Основные данные уже есть. Я собрал черновик и могу усилить заголовок и описание.",
+  "Не пиши: Хотите, я усилю заголовок?",
+  "Если данных не хватает: ровно один новый вопрос, и тот же вопрос в nextQuestion. Не спрашивай уже известные факты.",
   "Не пиши слова product, location, заполните, обязательные поля. Не проси пароль.",
 ].join(" ");
 
@@ -222,35 +226,93 @@ function checklist(facts: BrainFacts) {
   return lines.join("\n");
 }
 
-function acceptSpeech(raw: string | null, facts: BrainFacts) {
-  if (!raw) return null;
+export type SeniorAcceptance =
+  | "accepted"
+  | "invalid_json"
+  | "schema_invalid"
+  | "empty_message"
+  | "too_many_questions"
+  | "question_when_complete"
+  | "missing_question_when_incomplete"
+  | "asks_known_fact"
+  | "forbidden_wording";
+
+export type SpeechDecision = {
+  facts: BrainFacts;
+  message: string | null;
+  acceptance: SeniorAcceptance;
+  schemaValid: boolean;
+  questionCount: number;
+  factsComplete: boolean;
+  offerEnhancement: boolean | null;
+  contractViolation: "extra_next_question" | null;
+};
+
+function decision(input: Omit<SpeechDecision, "acceptance"> & { acceptance: SeniorAcceptance }): SpeechDecision {
+  return input;
+}
+
+export function judgeSeniorSpeech(raw: string | null, facts: BrainFacts): SpeechDecision {
+  const blank = {
+    facts,
+    message: null,
+    schemaValid: false,
+    questionCount: 0,
+    factsComplete: ready(facts),
+    offerEnhancement: null as boolean | null,
+    contractViolation: null as SpeechDecision["contractViolation"],
+  };
+  if (!raw) return decision({ ...blank, acceptance: "invalid_json" });
   let parsed: unknown;
   try {
     const start = raw.indexOf("{");
     const end = raw.lastIndexOf("}");
-    if (start < 0 || end <= start) return null;
+    if (start < 0 || end <= start) return decision({ ...blank, acceptance: "invalid_json" });
     parsed = JSON.parse(raw.slice(start, end + 1));
   } catch {
-    return null;
+    return decision({ ...blank, acceptance: "invalid_json" });
   }
   const body = seniorSchema.safeParse(parsed);
-  if (!body.success) return null;
+  if (!body.success) return decision({ ...blank, acceptance: "schema_invalid" });
   const product = cleanProduct(body.data.draftPatch?.product);
-  const nextFacts: BrainFacts = {
-    ...facts,
-    product: facts.product ?? product,
-  };
+  const nextFacts: BrainFacts = { ...facts, product: facts.product ?? product };
   const complete = ready(nextFacts);
   let message = body.data.message.trim();
-  const next = body.data.nextQuestion?.trim();
-  if (next && !complete && questions(message) === 0 && !message.includes(next)) message = `${message} ${next}`;
-  if (!message || questions(message) > 1) return { facts: nextFacts, message: null };
-  if (complete && questions(message) > 0) return { facts: nextFacts, message: null };
-  if (!complete && questions(message) === 0) return { facts: nextFacts, message: null };
-  if (asksKnown(message, nextFacts) || /заполните|обязательн|необходимо указать|\bproduct\b|\blocation\b/i.test(message)) {
-    return { facts: nextFacts, message: null };
+  const next = body.data.nextQuestion?.trim() || "";
+  const contractViolation: SpeechDecision["contractViolation"] = complete && next ? "extra_next_question" : null;
+  if (!complete && next && questions(message) === 0 && !message.includes(next)) message = `${message} ${next}`;
+  const questionCount = questions(message);
+  const offerEnhancement = typeof body.data.offerEnhancement === "boolean" ? body.data.offerEnhancement : null;
+  const judged = {
+    facts: nextFacts,
+    message: null,
+    schemaValid: true,
+    questionCount,
+    factsComplete: complete,
+    offerEnhancement,
+    contractViolation,
+  };
+  if (!message) return decision({ ...judged, acceptance: "empty_message" });
+  if (questionCount > 1) return decision({ ...judged, acceptance: "too_many_questions" });
+  if (complete && questionCount > 0) return decision({ ...judged, acceptance: "question_when_complete" });
+  if (!complete && questionCount === 0) return decision({ ...judged, acceptance: "missing_question_when_incomplete" });
+  if (asksKnown(message, nextFacts)) return decision({ ...judged, acceptance: "asks_known_fact" });
+  if (/заполните|обязательн|необходимо указать|\bproduct\b|\blocation\b/i.test(message)) {
+    return decision({ ...judged, acceptance: "forbidden_wording" });
   }
-  return { facts: nextFacts, message };
+  return decision({ ...judged, message, acceptance: "accepted" });
+}
+
+function acceptanceTelemetry(judged: SpeechDecision) {
+  return {
+    seniorAcceptance: judged.acceptance,
+    schemaValid: judged.schemaValid,
+    questionCount: judged.questionCount,
+    factsComplete: judged.factsComplete,
+    readyForDraft: ready(judged.facts),
+    ...(judged.offerEnhancement !== null ? { offerEnhancement: judged.offerEnhancement } : {}),
+    ...(judged.contractViolation ? { contractViolation: judged.contractViolation } : {}),
+  };
 }
 
 function changed(before: TaskState, after: TaskState) {
@@ -380,6 +442,7 @@ export async function guideGuestOnboarding(input: {
   let fallbackReason: string | undefined;
   let speech: string | null = null;
   let telemetry: Record<string, unknown> | undefined;
+  let acceptanceFields: Record<string, unknown> | undefined;
   let facts = heard;
   try {
     seniorCalls = 1;
@@ -398,12 +461,13 @@ export async function guideGuestOnboarding(input: {
       }),
     });
     if (!raw) fallbackReason = "unavailable";
-    const accepted = acceptSpeech(raw, heard);
-    if (accepted) {
-      facts = accepted.facts;
-      speech = accepted.message;
-      if (!speech) fallbackReason = "senior_message";
-    } else if (raw) fallbackReason = "senior_message";
+    else {
+      const judged = judgeSeniorSpeech(raw, heard);
+      facts = judged.facts;
+      speech = judged.message;
+      if (!speech) fallbackReason = judged.acceptance;
+      acceptanceFields = acceptanceTelemetry(judged);
+    }
   } catch (error) {
     const name = error instanceof Error ? error.name : "";
     const failure = error instanceof GrokCallError ? error : null;
@@ -425,6 +489,22 @@ export async function guideGuestOnboarding(input: {
   const reply = speech ?? fallbackLine(facts);
   const live = input.senior === undefined;
   const transport = live ? seniorTransportName() : null;
+  const seniorTelemetry =
+    (live && seniorCalls > 0) || telemetry || acceptanceFields
+      ? {
+          ...(live && seniorCalls > 0
+            ? {
+                provider: "grok-senior",
+                ...(transport ? { transport } : {}),
+                model: seniorModelId(),
+                providerStatus: speech ? 200 : null,
+              }
+            : {}),
+          ...(acceptanceFields ?? {}),
+          ...(telemetry ?? {}),
+          fallback: telemetry ? true : !speech,
+        }
+      : undefined;
   return finish({
     started,
     route: strategy ? "strategy-senior" : speech ? "guided-senior" : "fallback",
@@ -435,18 +515,6 @@ export async function guideGuestOnboarding(input: {
     intent: strategy ? "strategy" : "create_listing",
     success: Boolean(speech),
     ...(speech ? {} : { fallbackReason }),
-    ...(telemetry
-      ? { telemetry }
-      : live && seniorCalls > 0
-        ? {
-            telemetry: {
-              provider: "grok-senior",
-              ...(transport ? { transport } : {}),
-              model: seniorModelId(),
-              providerStatus: speech ? 200 : null,
-              fallback: !speech,
-            },
-          }
-        : {}),
+    ...(seniorTelemetry ? { telemetry: seniorTelemetry } : {}),
   });
 }
