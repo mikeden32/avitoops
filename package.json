@@ -13,6 +13,7 @@
     "accept": "tsx scripts/accept.ts",
     "agent": "tsx scripts/agent.ts",
     "grok:check": "tsx scripts/grok-check.ts",
+    "senior:transport:check": "tsx scripts/senior-transport-check.ts",
     "drafts:cleanup": "tsx scripts/guest-draft-cleanup.ts",
     "tariff:check": "tsx scripts/tariff-guide-check.ts",
     "backup": "powershell -NoProfile -File scripts/backup.ps1"

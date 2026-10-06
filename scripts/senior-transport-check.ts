@@ -1,7 +1,8 @@
 import { askGrok, GrokCallError, resolveSeniorTransport, seniorConfigured, speakGrok } from "../src/lib/grok";
 
-const ENV_KEYS = ["OPSI_BASE_URL", "OPSI_SERVICE_TOKEN", "XAI_API_KEY", "XAI_MODEL"] as const;
-const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+const ENV_KEYS = ["OPSI_BASE_URL", "OPSI_SERVICE_TOKEN", "XAI_API_KEY", "XAI_MODEL", "NODE_ENV"] as const;
+const env = process.env as Record<string, string | undefined>;
+const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, env[key]]));
 
 function check(name: string, ok: boolean) {
   if (!ok) throw new Error(name);
@@ -11,15 +12,15 @@ function check(name: string, ok: boolean) {
 function restoreEnv() {
   for (const key of ENV_KEYS) {
     const value = saved[key];
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
+    if (value === undefined) delete env[key];
+    else env[key] = value;
   }
 }
 
 function setEnv(values: Partial<Record<(typeof ENV_KEYS)[number], string>>) {
-  for (const key of ENV_KEYS) delete process.env[key];
+  for (const key of ENV_KEYS) delete env[key];
   for (const [key, value] of Object.entries(values)) {
-    if (value !== undefined) process.env[key] = value;
+    if (value !== undefined) env[key] = value;
   }
 }
 
@@ -93,7 +94,7 @@ async function main() {
     }
     check("C does not fall back to direct xAI", configError);
 
-    setEnv({ XAI_API_KEY: "dev-key" });
+    setEnv({ XAI_API_KEY: "dev-key", NODE_ENV: "development" });
     check("D direct dev fallback", resolveSeniorTransport() === "xai" && seniorConfigured());
     calls.length = 0;
     sawOpsi = false;
@@ -111,6 +112,14 @@ async function main() {
     sawDirect = false;
     const audio = await speakGrok("Проверка голоса для объявления бани в Подольске.");
     check("F speakGrok skips direct TTS when OPSI is configured", audio === null && calls.length === 0 && !sawDirect);
+
+    setEnv({ XAI_API_KEY: "dev-key", NODE_ENV: "production" });
+    check("G production key is not direct xAI", resolveSeniorTransport() !== "xai" && resolveSeniorTransport() === "blocked" && !seniorConfigured());
+    calls.length = 0;
+    sawDirect = false;
+    const blocked = await askGrok("system", "user");
+    const blockedAudio = await speakGrok("Проверка голоса для объявления бани в Подольске.");
+    check("G production does not call api.x.ai", blocked === null && blockedAudio === null && calls.length === 0 && !sawDirect);
 
     setEnv({ OPSI_BASE_URL: "https://ai.avitoops.ru", OPSI_SERVICE_TOKEN: "test-opsi-token", XAI_API_KEY: "dev-key" });
     calls.length = 0;

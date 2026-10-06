@@ -42,7 +42,7 @@ export function seniorModelId(env: NodeJS.ProcessEnv = process.env) {
   return id || "grok-4.6";
 }
 
-export type SeniorTransportKind = "opsi" | "xai" | "unavailable" | "invalid";
+export type SeniorTransportKind = "opsi" | "xai" | "unavailable" | "invalid" | "blocked";
 
 function envValue(env: NodeJS.ProcessEnv, name: string) {
   const value = env[name];
@@ -54,7 +54,7 @@ export function resolveSeniorTransport(env: NodeJS.ProcessEnv = process.env): Se
   const token = envValue(env, "OPSI_SERVICE_TOKEN");
   if (baseUrl && token) return "opsi";
   if (baseUrl || token) return "invalid";
-  if (envValue(env, "XAI_API_KEY")) return "xai";
+  if (envValue(env, "XAI_API_KEY")) return env.NODE_ENV === "production" ? "blocked" : "xai";
   return "unavailable";
 }
 
@@ -229,7 +229,7 @@ async function askXai(system: string, user: string) {
 
 export async function askGrok(system: string, user: string) {
   const kind = resolveSeniorTransport();
-  if (kind === "unavailable") return null;
+  if (kind === "unavailable" || kind === "blocked") return null;
   if (kind === "invalid") {
     throw new GrokCallError({
       providerStatus: null,
@@ -244,8 +244,7 @@ export async function askGrok(system: string, user: string) {
 }
 
 export async function speakGrok(text: string): Promise<Uint8Array | null> {
-  const kind = resolveSeniorTransport();
-  if (kind === "opsi" || kind === "invalid") return null;
+  if (resolveSeniorTransport() !== "xai") return null;
   const key = envValue(process.env, "XAI_API_KEY");
   if (!key) return null;
   const spoken = text.replaceAll("₽", " рублей ").replace(/\s+/g, " ").trim().slice(0, 700);
