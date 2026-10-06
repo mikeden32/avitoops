@@ -1,5 +1,5 @@
 import { accessLabel, formatRub, subscriptionStatusLabel } from "./format";
-import { askGrok } from "./grok";
+import { askGrok, seniorConfigured } from "./grok";
 import { DAILY_QUOTA, PLANS, planTitle, isPlan } from "./plans";
 import { redact } from "./redact";
 
@@ -139,7 +139,7 @@ export async function replyAsCurator(
   cabinet: string | null,
   useModel: boolean,
 ) {
-  if (useModel && process.env.XAI_API_KEY) {
+  if (useModel && seniorConfigured()) {
     try {
       const text = await grokReply(message, history, cabinet);
       if (text) return speak(text);

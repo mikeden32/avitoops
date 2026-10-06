@@ -7,7 +7,7 @@ import { clientProfiles, curatorLines, curatorOffers, deskTasks, listings, users
 import type { Plan } from "../db/schema";
 import { AppError } from "../errors";
 import { type Upload, assertUploads, compressPhoto, inboxFile } from "../files";
-import { askGrok } from "../grok";
+import { askGrok, seniorConfigured } from "../grok";
 import { guideGuestOnboarding, type SeniorClient } from "../ai/onboarding";
 import { DAILY_QUOTA, agentFillsProfile } from "../plans";
 import { guestPriceLine, speak } from "../curator";
@@ -183,7 +183,7 @@ export function checkedProposal(model: Proposal | null, userText: string): Propo
 }
 
 async function modelProposal(text: string) {
-  if (!process.env.XAI_API_KEY) return null;
+  if (!seniorConfigured()) return null;
   try {
     const raw = await askGrok(
       "Верни только JSON с полями action (publish, price, photo, promo, pause или none), title, city, priceRub, maxRub. Числа бери из реплики, не выдумывай. Без пояснений.",

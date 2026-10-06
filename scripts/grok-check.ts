@@ -1,19 +1,19 @@
-import { askGrok, GrokCallError } from "../src/lib/grok";
+import { askGrok, GrokCallError, seniorConfigured } from "../src/lib/grok";
 import { loadEnv } from "./load-env";
 
 loadEnv();
 
 async function main() {
-  if (!process.env.XAI_API_KEY) {
-    console.log("Ключа нет. Grok не вызывается, токены не тратятся.");
+  if (!seniorConfigured()) {
+    console.log("Senior не настроен.");
     process.exit(1);
   }
   const answer = await askGrok("Ответь одним словом по-русски.", "Скажи: готов");
   if (!answer) {
-    console.log("Ключ есть, но Grok ничего не ответил. Проверьте ключ и название модели XAI_MODEL.");
+    console.log("Senior ничего не ответил.");
     process.exit(1);
   }
-  console.log(`Grok ответил: ${answer}`);
+  console.log(`Senior ответил: ${answer}`);
 }
 
 main().catch((error) => {

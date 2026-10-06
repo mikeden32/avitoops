@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { askGrok, GrokCallError, seniorModelId } from "../grok";
+import { askGrok, GrokCallError, seniorModelId, seniorTransportName } from "../grok";
 import { logInfo } from "../redact";
 import { formatRub } from "../format";
 import { speak } from "../curator";
@@ -406,11 +406,13 @@ export async function guideGuestOnboarding(input: {
     } else if (raw) fallbackReason = "senior_message";
   } catch (error) {
     const name = error instanceof Error ? error.name : "";
-    const timedOut = name === "TimeoutError" || name === "AbortError";
-    fallbackReason = timedOut ? "timeout" : "provider_error";
     const failure = error instanceof GrokCallError ? error : null;
+    const timedOut = name === "TimeoutError" || name === "AbortError" || failure?.providerErrorType === "timeout";
+    fallbackReason = timedOut ? "timeout" : "provider_error";
+    const transport = input.senior === undefined ? seniorTransportName() : null;
     telemetry = {
       provider: "grok-senior",
+      ...(transport ? { transport } : {}),
       model: seniorModelId(),
       providerStatus: failure?.providerStatus ?? null,
       providerErrorType: failure?.providerErrorType ?? (timedOut ? "timeout" : "unknown"),
@@ -422,6 +424,7 @@ export async function guideGuestOnboarding(input: {
   }
   const reply = speech ?? fallbackLine(facts);
   const live = input.senior === undefined;
+  const transport = live ? seniorTransportName() : null;
   return finish({
     started,
     route: strategy ? "strategy-senior" : speech ? "guided-senior" : "fallback",
@@ -438,6 +441,7 @@ export async function guideGuestOnboarding(input: {
         ? {
             telemetry: {
               provider: "grok-senior",
+              ...(transport ? { transport } : {}),
               model: seniorModelId(),
               providerStatus: speech ? 200 : null,
               fallback: !speech,
